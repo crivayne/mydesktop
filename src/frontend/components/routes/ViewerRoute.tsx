@@ -28,7 +28,7 @@ import { viewerRpcs } from "../../../common/ViewerConfig";
 import {
   unifiedSelectionStorage,
 } from "../../../selectionStorage";
-import { IModelMergeItemsProvider } from "../../extensions";
+
 export interface ViewerRouteState {
   filePath?: string;
 }
@@ -45,8 +45,7 @@ export const ViewerRoute = () => {
   }, [location?.state]);
 
   return filePath ? (
-    <Viewer
-      clientId={import.meta.env.IMJS_VIEWER_CLIENT_ID ?? ""}
+    <Viewer    
       rpcInterfaces={viewerRpcs}
       filePath={filePath}
       uiProviders={[
@@ -113,7 +112,6 @@ export const ViewerRoute = () => {
           ],
         },
         new MeasureToolsUiItemsProvider(),
-        new IModelMergeItemsProvider(),
       ]}
       enablePerformanceMonitors={true}
       selectionStorage={unifiedSelectionStorage}

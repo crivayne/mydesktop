@@ -20,7 +20,7 @@ import { viewerRpcs } from "../../common/ViewerConfig";
 import { unifiedSelectionStorage } from "../../selectionStorage";
 import { ITwinViewerApp } from "../app/ITwinViewerApp";
 import { SettingsContextProvider } from "../services/SettingsContext";
-import { HomeRoute, IModelsRoute, ITwinsRoute, ViewerRoute } from "./routes";
+import { HomeRoute, ViewerRoute } from "./routes";
 
 const App = () => {
   window.ITWIN_VIEWER_HOME = window.location.origin;
@@ -69,8 +69,6 @@ const App = () => {
                   }
                 >
                   <Route path="/" element={<HomeRoute />} />
-                  <Route path="/itwins/:iTwinId" element={<IModelsRoute />} />
-                  <Route path="/itwins" element={<ITwinsRoute />} />
                 </Route>
                 <Route
                   element={

@@ -33,8 +33,11 @@ class UserSettings {
    * Generate default settings values
    */
   private defaultSettings() {
-    this._settings.defaultRecent = false;
-    this._settings.recents = [];
+    this._settings = {
+      defaultRecent: false,
+      recents: [],
+      imodelImporterPath: undefined,   // 추가(옵션이지만 권장)
+    };
     this._writeSettings();
   }
 
@@ -78,7 +81,7 @@ class UserSettings {
     // if the local file doesn't exist anymore
     if (this._settings.recents) {
       for (const file of this._settings.recents) {
-        if (!existsSync(file.path)) {
+        if (file.path && !existsSync(file.path)) {   // ⬅️ 안전 가드 추가
           file.path = "";
         }
       }
@@ -127,6 +130,22 @@ class UserSettings {
       }
       this._writeSettings();
     }
+  }
+
+  /** 외부에서 강제로 settings.json 저장이 필요할 때 호출 */
+  public save() {
+    this._writeSettings();
+  }
+
+  /** Importer 2.0 실행파일 경로 저장 */
+  public setImodelImporterPath(p?: string) {
+    this.settings.imodelImporterPath = p;
+    this._writeSettings();
+  }
+
+  /** Importer 2.0 실행파일 경로 읽기 */
+  public get imodelImporterPath(): string | undefined {
+    return this.settings.imodelImporterPath;
   }
 }
 

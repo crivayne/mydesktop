@@ -3,7 +3,5 @@
  * See LICENSE.md in the project root for license terms and full copyright notice.
  *--------------------------------------------------------------------------------------------*/
 
-export * from "./HomeRoute";
-export * from "./IModelsRoute";
-export * from "./ITwinsRoute";
-export * from "./ViewerRoute";
+export { HomeRoute } from "./HomeRoute";
+export { ViewerRoute } from "./ViewerRoute";

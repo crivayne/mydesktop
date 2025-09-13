@@ -9,6 +9,7 @@ import { ElectronMainAuthorization } from "@itwin/electron-authorization/Main";
 import {
   dialog, 
   Menu,
+  shell,
   type OpenDialogOptions,
   type OpenDialogReturnValue,
   type SaveDialogOptions,
@@ -26,6 +27,9 @@ import {
 } from "../common/ViewerConfig";
 import { getAppEnvVar } from "./AppInfo";
 import UserSettings from "./UserSettings";
+
+import { spawn } from "node:child_process";
+import * as path from "node:path";
 
 class ViewerHandler extends IpcHandler implements ViewerIpc {
   private static _authInitialized = false;
@@ -104,39 +108,65 @@ class ViewerHandler extends IpcHandler implements ViewerIpc {
    * Changes due to connectivity status
    * @param connectivityStatus
    */
-  public async setConnectivity(
-    connectivityStatus: InternetConnectivityStatus
-  ): Promise<void> {
-    const downloadMenuItem =
-      Menu.getApplicationMenu()?.getMenuItemById("download-menu-item");
-    if (connectivityStatus === InternetConnectivityStatus.Offline) {
-      // offline, disable the download menu item
-      if (downloadMenuItem) {
-        downloadMenuItem.enabled = false;
-      }
-    } else if (connectivityStatus === InternetConnectivityStatus.Online) {
-      if (!ViewerHandler._authInitialized) {
-        // we are online now and were not before so configure the auth backend
-        const clientId = getAppEnvVar("CLIENT_ID") ?? "";
-        const scopes = getAppEnvVar("SCOPE") ?? "";
-        const redirectUri = getAppEnvVar("REDIRECT_URI") ?? "";
-        const issuerUrl = getAppEnvVar("ISSUER_URL");
+  public async setConnectivity() : Promise<void> {
+    // 완전 오프라인: 다운로드 메뉴 비활성
+    const downloadMenuItem = Menu.getApplicationMenu()?.getMenuItemById("download-menu-item");
+    if (downloadMenuItem) downloadMenuItem.enabled = false;
+    // 인증 초기화 스킵
+    return;
+  }
 
-        const authClient = new ElectronMainAuthorization({
-          clientId,
-          scopes,
-          redirectUris: [redirectUri],
-          issuerUrl,
-        });
-        await authClient.signInSilent();
-        IModelHost.authorizationClient = authClient;
-        ViewerHandler._authInitialized = true;
-      }
-      if (downloadMenuItem) {
-        // online so enable the download menu item
-        downloadMenuItem.enabled = true;
-      }
-    }
+  /** 외부 URL 열기 (스냅샷 앱 다운로드 페이지 등) */
+  public async openUrl(url: string): Promise<void> {
+    await shell.openExternal(url);
+  }
+
+  /** Importer 2.0 경로 저장 */
+  public async setImodelImporterPath(exePath: string): Promise<void> {
+    UserSettings.setImodelImporterPath(exePath);
+  }
+
+  /** Importer 2.0 GUI 실행 (인자 없이 실행) */
+  public async runImodelImporterGUI(exePath?: string): Promise<boolean> {
+    const p = exePath ?? UserSettings.imodelImporterPath;
+    if (!p || !existsSync(p)) return false;
+    const child = spawn(p, [], { detached: true, stdio: "inherit" });
+    child.unref();
+    return true;
+  }
+
+  /** Importer 2.0 CLI 실행
+   * @param args  - IDgnToIDgnDb.exe 인자 (예: ["-i", in.i.dgn, "-z", out.imodel, "--output", out.ibim, "--imodelVersion", "2.0"])
+   * @param cwd   - 실행 작업 폴더(로그/임시파일 관리에 유용)
+   */
+  public async runImodelImporterCLI(
+    args: string[],
+    cwd?: string
+  ): Promise<{ ok: boolean; exitCode: number | null }> {
+    const exe = UserSettings.imodelImporterPath;
+    if (!exe || !existsSync(exe)) return { ok: false, exitCode: null };
+
+    return await new Promise((resolve) => {
+      const child = spawn(exe, args, {
+        cwd,
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          // 매뉴얼: 로깅 활성화
+          BENTLEY_DGNDBIMPORTER_LOGGING_ENABLE: "1",
+          // 필요 시: BENTLEY_DGNDBIMPORTER_LOGGING_CONFIG: "C:\\Program Files\\Bentley\\DgnV8Converter 2.0\\logging.config.xml",
+        },
+      });
+      child.on("exit", (code) => resolve({ ok: code === 0, exitCode: code ?? null }));
+      child.on("error", () => resolve({ ok: false, exitCode: null }));
+    });
+  }
+
+  public async openDirectory(): Promise<OpenDialogReturnValue> {
+    return dialog.showOpenDialog({
+      title: "Select output folder",
+      properties: ["openDirectory", "createDirectory"], // 폴더 선택 + 없으면 생성
+    });
   }
 }
 

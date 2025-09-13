@@ -32,6 +32,15 @@ export interface ViewerIpc {
   setConnectivity: (
     connectivityStatus: InternetConnectivityStatus
   ) => Promise<void>;
+
+  openDirectory(): Promise<OpenDialogReturnValue>;                 // 추가
+
+  setImodelImporterPath(exePath: string): Promise<void>;           // 추가
+  runImodelImporterGUI(exePath?: string): Promise<boolean>;        // 추가
+  runImodelImporterCLI(
+    args: string[],
+    cwd?: string
+  ): Promise<{ ok: boolean; exitCode: number | null }>;            // 추가
 }
 
 export interface ViewerConfig {
@@ -60,4 +69,5 @@ export interface ViewerFile {
 export interface ViewerSettings {
   defaultRecent?: boolean;
   recents?: ViewerFile[];
+  imodelImporterPath?: string; // iModel importer 2.0 실행 파일 경로
 }

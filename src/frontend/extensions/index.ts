@@ -3,4 +3,5 @@
  * See LICENSE.md in the project root for license terms and full copyright notice.
  *--------------------------------------------------------------------------------------------*/
 
-export * from "./IModelMergeStatusBarItem";
+//export * from "./IModelMergeStatusBarItem";
+export {};
