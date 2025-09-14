@@ -147,6 +147,14 @@ class UserSettings {
   public get imodelImporterPath(): string | undefined {
     return this.settings.imodelImporterPath;
   }
+
+    public getSnapshotDir(): string {
+    return (this.settings as any).snapshotDir ?? "";
+  }
+  public setSnapshotDir(dir: string) {
+    (this.settings as any).snapshotDir = dir;
+    this._writeSettings();
+  }
 }
 
 const userSettings = new UserSettings();

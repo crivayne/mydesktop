@@ -104,7 +104,7 @@ const createMenu = () => {
       submenu: [
         {
           id: "view-getting-started-menu-item",
-          label: "Getting started",
+          label: "Home",
           click: () => {
             IpcHost.send(channelName, "home");
           },

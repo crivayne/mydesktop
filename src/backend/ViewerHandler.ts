@@ -3,6 +3,7 @@
  * See LICENSE.md in the project root for license terms and full copyright notice.
  *--------------------------------------------------------------------------------------------*/
 
+import { ElectronHost } from "@itwin/core-electron/lib/cjs/ElectronBackend";
 import { IModelHost, IpcHandler } from "@itwin/core-backend";
 import { InternetConnectivityStatus } from "@itwin/core-common";
 import { ElectronMainAuthorization } from "@itwin/electron-authorization/Main";
@@ -167,6 +168,20 @@ class ViewerHandler extends IpcHandler implements ViewerIpc {
       title: "Select output folder",
       properties: ["openDirectory", "createDirectory"], // 폴더 선택 + 없으면 생성
     });
+  }
+
+  // 스냅샷 폴더 가져오기/설정
+  public async getSnapshotDir(): Promise<string> {
+    return UserSettings.getSnapshotDir();
+  }
+
+  public async setSnapshotDir(dir: string): Promise<void> {
+    UserSettings.setSnapshotDir(dir);
+  }
+
+  // 상단메뉴 노출설정
+  public async setMenuVisible(visible: boolean): Promise<void> {
+  ElectronHost.mainWindow?.setMenuBarVisibility(visible);
   }
 }
 

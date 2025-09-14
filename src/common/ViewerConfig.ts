@@ -34,6 +34,8 @@ export interface ViewerIpc {
   ) => Promise<void>;
 
   openDirectory(): Promise<OpenDialogReturnValue>;                 // 추가
+  getSnapshotDir(): Promise<string>;               
+  setSnapshotDir(dir: string): Promise<void>; 
 
   setImodelImporterPath(exePath: string): Promise<void>;           // 추가
   runImodelImporterGUI(exePath?: string): Promise<boolean>;        // 추가
@@ -70,4 +72,5 @@ export interface ViewerSettings {
   defaultRecent?: boolean;
   recents?: ViewerFile[];
   imodelImporterPath?: string; // iModel importer 2.0 실행 파일 경로
+  snapshotDir?: string;        // 스냅샷 로컬 폴더
 }

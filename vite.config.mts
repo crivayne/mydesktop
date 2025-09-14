@@ -13,6 +13,7 @@ export default defineConfig((): UserConfig => {
     server: {
       port: 3000,
       strictPort: true, // exit if port is already in use
+      proxy: { "/itwin/api": { target: "http://127.0.0.1", changeOrigin: true } }
     },
     plugins: [
       react(),
