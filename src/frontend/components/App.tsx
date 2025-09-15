@@ -14,7 +14,7 @@ import {
 } from "@itwin/measure-tools-react";
 import { PropertyGridManager } from "@itwin/property-grid-react";
 import { TreeWidget } from "@itwin/tree-widget-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Outlet, Route, Routes, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { IpcApp } from "@itwin/core-frontend";
 
@@ -25,6 +25,7 @@ import { SettingsContextProvider } from "../services/SettingsContext";
 import { ViewerRoute } from "./routes";
 import LoginPanel from "../components/login/LoginPanel";
 import ProjectSitePanel from "../components/projects/ProjectSitePanel";
+import RenderSettings from "../components/viewer/RenderSettings";
 
 function LoginPage() {
   const navigate = useNavigate();
@@ -124,6 +125,27 @@ const App = () => {
     }
   }, [initialized, connectivityStatus]);
 
+   const [showRenderSettings, setShowRenderSettings] = useState(false);
+
+  useEffect(() => {
+    if (!initialized) return;
+
+    // 1) 백엔드 메뉴 → IPC로 들어오는 “render-settings”
+    const onMenu = (_evt: any, cmd: string) => { if (cmd === "render-settings") setShowRenderSettings(true); };
+    // @ts-ignore
+    IpcApp.addListener(channelName, onMenu);
+
+    // 2) 프런트 전역 커스텀 이벤트
+    const onCustom = () => setShowRenderSettings(true);
+    window.addEventListener("itwin:render-settings", onCustom as EventListener);
+
+    return () => {
+      // @ts-ignore
+      IpcApp.removeListener?.(channelName, onMenu);
+      window.removeEventListener("itwin:render-settings", onCustom as EventListener);
+    };
+  }, [initialized]);
+
   return (
     <ThemeProvider theme="dark" style={{ height: "100%" }}>
       {initialized ? (
@@ -156,6 +178,8 @@ const App = () => {
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </PageLayout>
+            {/* ✅ 전역에서 항상 렌더됨: /home, /viewer 어디서든 열림 */}
+            <RenderSettings open={showRenderSettings} onClose={()=>setShowRenderSettings(false)} />
           </SettingsContextProvider>
         </BrowserRouter>
       ) : (

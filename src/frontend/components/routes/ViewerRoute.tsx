@@ -24,7 +24,6 @@ import {
 } from "@itwin/tree-widget-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-
 import { viewerRpcs, channelName } from "../../../common/ViewerConfig";
 import {
   unifiedSelectionStorage,
@@ -32,6 +31,7 @@ import {
 import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
 import RenderSettings from "../viewer/RenderSettings";
+import { ViewClipToggleProvider } from "../../extensions/viewclip/ViewClipToggleProvider";
 
 function PickDialog<T>(props: {
   open: boolean;
@@ -279,6 +279,7 @@ export const ViewerRoute = () => {
               })],
             },
             new MeasureToolsUiItemsProvider(),
+            new ViewClipToggleProvider(),
           ]}
           enablePerformanceMonitors={true}
           selectionStorage={unifiedSelectionStorage}

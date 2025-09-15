@@ -85,7 +85,7 @@
     "build:frontend": "vite build",
     "build:backend": "tsc -p tsconfig.backend.json",
     "electron": "electron lib/backend/main.js",
-    "electron:debug": "cross-env NODE_ENV=development electron lib/backend/main.js",
+    "electron:debug": "cross-env NODE_ENV=development electron --max-old-space-size=8192 lib/backend/main.js",
     "start": "npm run build:backend && run-p \"start:frontend\" \"electron:debug\"",
     "start:frontend": "vite",
     "test": "",
