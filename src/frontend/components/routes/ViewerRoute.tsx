@@ -31,6 +31,7 @@ import {
 } from "../../../selectionStorage";
 import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
+import RenderSettings from "../viewer/RenderSettings";
 
 function PickDialog<T>(props: {
   open: boolean;
@@ -87,6 +88,7 @@ export const ViewerRoute = () => {
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
   const [snapDir, setSnapDir] = useState<string>("");
   const [pendingServerUrl, setPendingServerUrl] = useState<string | null>(null);
+  const [showRenderSettings, setShowRenderSettings] = useState(false);
 
   // ✅ 로컬 스냅샷 폴더(.env)
   const SNAP_DIR = (import.meta as any).env?.VITE_SNAPSHOT_DIR?.toString() || "";
@@ -213,6 +215,15 @@ export const ViewerRoute = () => {
     };
   }, [filePath]);
   
+  useEffect(() => {
+    const onMenu = (_evt: any, cmd: string) => {
+      if (cmd === "render-settings") setShowRenderSettings(true);
+    };
+    // @ts-ignore
+    IpcApp.addListener(channelName, onMenu);
+    return () => { /* @ts-ignore */ IpcApp.removeListener?.(channelName, onMenu); };
+  }, []);
+
   return (
     <>
       {filePath ? (
@@ -313,6 +324,8 @@ export const ViewerRoute = () => {
           } catch {}
         }}
       />
+      {/* 설정 패널 */}
+      <RenderSettings open={showRenderSettings} onClose={()=>setShowRenderSettings(false)} />
     </>
   );
 };

@@ -132,6 +132,19 @@ const createMenu = () => {
         },
       ],
     },
+     {
+      label: "Setting",
+      submenu: [
+        {
+          id: "settings-menu-item",
+          label: "Rendering settings",
+          click: () => {
+            IpcHost.send(channelName, "render-settings");
+          },
+          accelerator: "CommandOrControl+R",
+        },
+      ],
+    },
   ] as MenuItemConstructorOptions[];
 
   if (isMac) {
