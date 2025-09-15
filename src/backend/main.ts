@@ -11,9 +11,10 @@ import { ECSchemaRpcImpl } from "@itwin/ecschema-rpcinterface-impl";
 import { BackendIModelsAccess } from "@itwin/imodels-access-backend";
 import { Presentation } from "@itwin/presentation-backend";
 import * as dotenvFlow from "dotenv-flow";
-import { Menu, shell } from "electron";
+import { Menu, shell, app as electronApp } from "electron";
 import type { MenuItemConstructorOptions } from "electron/main";
 import * as path from "path";
+import * as fs from "fs";
 
 import { AppLoggerCategory } from "../common/LoggerCategory";
 import { channelName, viewerRpcs } from "../common/ViewerConfig";
@@ -40,15 +41,30 @@ const viewerMain = async () => {
     iconName: "itwin-viewer.ico",
   };
 
+  // ✅ 캐시/타일 캐시를 안전한 ASCII 경로로 강제 지정
+  //    메인 프로세스의 electron.app으로 안전한 경로를 만든다.
+  const baseUserData = electronApp.getPath("userData"); // e.g. C:\Users\<you>\AppData\Roaming\Electron
+  const appUserData  = baseUserData.replace(/\\Electron$/i, "\\iTwinViewer");
+  const cacheDir     = path.join(appUserData, "cache");
+  const tileCacheDir = path.join(appUserData, "tile-cache");
+  for (const dir of [appUserData, cacheDir, tileCacheDir]) {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  }
+  
   const iModelHost = new IModelHostConfiguration();
+  // 로컬 스냅샷만 쓸 거라면 hubAccess 지정은 사실상 의미 없음(있어도 무방)
   iModelHost.hubAccess = new BackendIModelsAccess();
+  // ⬇️ 백엔드 캐시 디렉터리와 타일 캐시 위치를 명시
+  // (버전에 따라 cacheDir / tileAdmin 옵션 명칭이 다를 수 있어요. cacheDir만 지정해도 효과 큽니다.)
+  (iModelHost as any).cacheDir = cacheDir; // 핵심: 내부에서 캐시/임시 사용
+  //(iModelHost as any).tileAdmin = { cacheDir: tileCacheDir };       // 선택: 타일 캐시 경로 명시
+
 
   await ElectronHost.startup({ electronHost, iModelHost });
-
   Presentation.initialize();
 
   await ElectronHost.openMainWindow({
-    width: 1280,
+    width: 1080,
     height: 800,
     show: true,
     title: appInfo.title,
@@ -68,6 +84,10 @@ const viewerMain = async () => {
     void shell.openExternal(url);
     return { action: "deny" };
   });
+
+  console.log("[iTwin] cacheDir =", cacheDir);
+  console.log("[iTwin] tileCacheDir =", tileCacheDir);
+
 };
 
 const createMenu = () => {

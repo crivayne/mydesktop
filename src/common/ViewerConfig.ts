@@ -43,6 +43,8 @@ export interface ViewerIpc {
     args: string[],
     cwd?: string
   ): Promise<{ ok: boolean; exitCode: number | null }>;            // 추가
+
+  setAppProgress(value: number | null, mode?: "normal" | "indeterminate" | "error" | "paused"): Promise<void>; // progress
 }
 
 export interface ViewerConfig {

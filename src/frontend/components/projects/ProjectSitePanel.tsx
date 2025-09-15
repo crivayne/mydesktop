@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IpcApp } from "@itwin/core-frontend";
 import { channelName } from "../../../common/ViewerConfig";
 import { Api } from "../../services/api";
+import BusyOverlay from "../common/BusyOverlay";
 
 // 간단 폼 POST (PHP의 $_POST 호환)
 async function postForm<T>(url: string, data: Record<string, string>) {
@@ -99,6 +100,10 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
   const [nameDlgInitial, setNameDlgInitial] = useState("");
   const nameDlgResolveRef = React.useRef<((v: string | null) => void) | null>(null);
 
+  const [progressPct, setProgressPct] = useState<number | null>(null);
+  const [progressLabel, setProgressLabel] = useState<string>("");  // 상황별 라벨
+
+
   // 이름 입력을 Promise로 받는 헬퍼
   const askName = React.useCallback((title: string, initial = ""): Promise<string | null> => {
     setNameDlgTitle(title);
@@ -177,9 +182,70 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
     alert("Importer 경로가 저장되었습니다.");
   };
 
-  const runImporterGUI = async () => {
-    const ok = await IpcApp.callIpcChannel(channelName, "runImodelImporterGUI");
-    if (!ok) alert("Importer 경로가 설정되지 않았습니다. 먼저 '경로 지정'을 해주세요.");
+  const runImodelImporterCLI = async () => {
+    try {
+      // 1) 입력 .i.dgn 선택
+      const pickIn: any = await IpcApp.callIpcChannel(channelName, "openFile", {
+        title: "입력 i.dgn 선택",
+        properties: ["openFile"],
+        filters: [{ name: "iModel Package", extensions: ["i.dgn", "idgn", "dgn"] }],
+      });
+      const inPath = pickIn?.filePaths?.[0];
+      if (!inPath) return;
+
+      // 2) 출력 폴더 선택
+      const pickOut: any = await IpcApp.callIpcChannel(channelName, "openDirectory", {
+        title: "출력 폴더 선택",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      const outDir = pickOut?.filePaths?.[0];
+      if (!outDir) return;
+
+      // (선택) 최초 1회 Importer exe 경로 저장
+      const settings: any = await IpcApp.callIpcChannel(channelName, "getSettings");
+      let importerPath: string = settings?.imodelImporterPath || "";
+      if (!importerPath) {
+        const pickExe: any = await IpcApp.callIpcChannel(channelName, "openFile", {
+          title: "IDgnToIDgnDb.exe 선택",
+          properties: ["openFile"],
+          filters: [{ name: "Executable", extensions: ["exe"] }],
+        });
+        importerPath = pickExe?.filePaths?.[0] || "";
+        if (!importerPath) return;
+        await IpcApp.callIpcChannel(channelName, "setImodelImporterPath", importerPath);
+      }
+
+      // 3) 실행
+      setBusy(true);
+      setProgressPct(null);                         // 불확정 진행
+      setProgressLabel("iModel 변환 중… (시간이 걸릴 수 있습니다)");
+      await IpcApp.callIpcChannel(channelName, "setAppProgress", 0.1, "indeterminate");
+
+      // 파일명/출력 경로 구성 (프런트에서 간단히 조합)
+      const base = (inPath.split(/[\\/]/).pop() || "").replace(/(\.i)?\.dgn$/i, "");
+      const sep = outDir.includes("\\") ? "\\" : "/";
+      const outBase = outDir.replace(/[\\/]+$/, "");
+      const ibim = `${outBase}${sep}${base}.ibim`;
+      const imodel = `${outBase}${sep}${base}.imodel`;
+
+      // 백엔드가 요구하는 배열 인자 형태로 호출
+      const result: any = await IpcApp.callIpcChannel(
+        channelName,
+        "runImodelImporterCLI",
+        ["-i", inPath, "--output", ibim, "-z", imodel, "--imodelVersion", "2.0"],
+        outDir
+      );
+
+      if (result?.ok) alert(`변환 완료\n${ibim}\n${imodel}`);
+      else alert(`변환 실패 (exitCode: ${result?.exitCode ?? "?"})`);
+    } catch (e:any) {
+      alert(`오류: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
+      setProgressPct(null);
+      setProgressLabel("");
+      await IpcApp.callIpcChannel(channelName, "setAppProgress", null);
+    }
   };
 
   // --- 프로젝트 CRUD (admin 전용) ---
@@ -277,15 +343,27 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
       const displayName = name || f.name;
 
       setBusy(true);
+      setProgressPct(0);
+      setProgressLabel("스냅샷 업로드 중…");
+      await IpcApp.callIpcChannel(channelName, "setAppProgress", 0, "normal");
+
       try {
-        const res = await Api.uploadSnapshotGlobal(f, displayName);
+        const res = await Api.uploadSnapshotGlobal(f, displayName, async (p) => {
+          setProgressPct(p);
+          await IpcApp.callIpcChannel(channelName, "setAppProgress", p, "normal");
+        });
         console.log("upload response", res);
-        if (!res?.success) { alert(`업로드 실패: ${res?.message || "서버 에러"}`); return; }
         alert("업로드 완료");
-        await loadSites(selectedProjectId); // 필요시 화면 갱신
+        await loadSites(selectedProjectId);
       } catch (e) {
-        console.error(e); alert("업로드 중 오류");
-      } finally { setBusy(false); }
+        console.error(e); alert(String(e));
+        await IpcApp.callIpcChannel(channelName, "setAppProgress", null);
+      } finally {
+        setBusy(false);
+        setProgressPct(null);
+        setProgressLabel("");
+        await IpcApp.callIpcChannel(channelName, "setAppProgress", null);
+      }
     };
   };
 
@@ -295,7 +373,7 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
       <header style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <h2 style={{ margin: 0, flex: 1 }}>Projects & Sites</h2>
         <button onClick={locateImporter}>Importer 2.0 경로 지정…</button>
-        <button onClick={runImporterGUI}>Importer 2.0 실행(GUI)…</button>
+        <button onClick={runImodelImporterCLI}>Importer 2.0 실행(CLI)…</button>
 
         {isAdmin}
         <button disabled={busy} onClick={uploadSnapshotGlobal}>스냅샷 업로드(서버)…</button>
@@ -452,6 +530,7 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
           nameDlgResolveRef.current = null;
         }}
       />
+      <BusyOverlay open={busy} label={progressLabel} percent={progressPct} />
     </div>
   );
 }

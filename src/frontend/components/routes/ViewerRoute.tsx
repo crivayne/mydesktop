@@ -29,7 +29,7 @@ import { viewerRpcs, channelName } from "../../../common/ViewerConfig";
 import {
   unifiedSelectionStorage,
 } from "../../../selectionStorage";
-import { IpcApp } from "@itwin/core-frontend";
+import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
 
 function PickDialog<T>(props: {
@@ -190,6 +190,29 @@ export const ViewerRoute = () => {
     return () => { /* @ts-ignore */ IpcApp.removeListener?.(channelName, onMenu); };
   }, [siteId]);
 
+  useEffect(() => {
+    if (!filePath) return;
+
+    const onOpen = (vp: Viewport) => {
+      // 약간 뒤에 실행해서 뷰가 완전히 뜬 뒤 Fit
+      setTimeout(() => {
+        try {
+          // 특정 뷰포트에 대해 Fit 실행
+          void IModelApp.tools.run("View.Fit", vp);
+        } catch (e) {
+          console.warn("Fit failed:", e);
+          // 실패시 첫 뷰포트 대상으로 한 번 더 시도
+          const first = IModelApp.viewManager.getFirstOpenView();
+          if (first) void IModelApp.tools.run("View.Fit", first);
+        }
+      }, 80);
+    };
+    IModelApp.viewManager.onViewOpen.addListener(onOpen);
+    return () => {
+      IModelApp.viewManager.onViewOpen.removeListener(onOpen);
+    };
+  }, [filePath]);
+  
   return (
     <>
       {filePath ? (

@@ -183,6 +183,15 @@ class ViewerHandler extends IpcHandler implements ViewerIpc {
   public async setMenuVisible(visible: boolean): Promise<void> {
   ElectronHost.mainWindow?.setMenuBarVisibility(visible);
   }
+
+  public async setAppProgress(value: number | null, mode?: "normal" | "indeterminate" | "error" | "paused"): Promise<void> {
+    const win = ElectronHost.mainWindow;
+    if (!win) return;
+    if (value == null) { win.setProgressBar(-1); return; }
+    if (mode) win.setProgressBar(value, { mode: mode as any });
+    else win.setProgressBar(value);
+  }
+
 }
 
 export default ViewerHandler;
