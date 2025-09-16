@@ -229,6 +229,11 @@ let _baseHiddenModels: Id64String[] = [];  // base vp에서 임시로 끈 모델
 export function setModelPair(left?: Id64String, right?: Id64String) {
   _leftModelId = left;
   _rightModelId = right;
+  if (left && right && left === right) {
+  // 동일 선택이면 비교를 끄고 종료
+  disableModelsCompare(/* viewport optional */);
+  return;
+}
 }
 
 async function createOverlayViewport(base: ScreenViewport): Promise<ScreenViewport | undefined> {
@@ -291,6 +296,10 @@ export function updateOverlayClip(screenX: number | undefined, vp: ScreenViewpor
 
 /** Widget에서 드래그 포인트 갱신 시 호출 */
 export function compareModels(screenPoint: Point3d | undefined, viewport: ScreenViewport): void {
+    if (!_leftModelId || !_rightModelId || _leftModelId === _rightModelId) {
+    disableModelsCompare(viewport);
+    return;
+  }
   void ensureOverlayForModels(viewport);
   updateOverlayClip(screenPoint?.x, viewport);
 }

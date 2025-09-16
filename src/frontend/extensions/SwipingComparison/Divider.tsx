@@ -116,10 +116,12 @@ export class DividerComponent extends React.Component<DividerComponentProps, {}>
       <>
         <div id={"divider-panel-left"} className={"divider-panel"}
           style={{
+            position: "absolute",
             top: this.props.bounds.top,
             height: this.props.bounds.height,
             left: this.props.bounds.left,
             width: this.state.left,
+            overflow: "hidden",
           }}
         >
           {this.props.leftChildren}
@@ -130,6 +132,11 @@ export class DividerComponent extends React.Component<DividerComponentProps, {}>
             left: this.state.left,
             top: this.props.bounds.top,
             height: this.props.bounds.height,
+            position: "absolute",
+            width: 6,
+            cursor: "ew-resize",
+            zIndex: 101,            // ✅ 오버레이(zIndex 20)보다 위
+            pointerEvents: "auto",  // ✅ 드래그 가능
           }}
           id={"divider-div"}
           role="presentation"
@@ -139,10 +146,12 @@ export class DividerComponent extends React.Component<DividerComponentProps, {}>
         </div>
         <div id={"divider-panel-right"} className={"divider-panel"}
           style={{
+            position: "absolute",
             top: this.props.bounds.top,
             height: this.props.bounds.height,
             left: this.state.left,
             width: this.props.bounds.right - this.state.left,
+            overflow: "hidden",
           }}
         >
           {this.props.rightChildren}

@@ -16,6 +16,7 @@ import { IModelApp, ScreenViewport } from "@itwin/core-frontend";
 import ViewClipApi from "./viewclip/ViewClipApi";
 import { ViewClipWidget } from "./viewclip/ViewClipWidget";
 import * as SwipingComparisonApi from "./SwipingComparison/SwipingComparisonApi";
+import { SwipingComparisonWidget } from "./SwipingComparison/SwipingComparisonWidget";
 
 // SyncUi 이벤트 아이디 (아무 문자열로 유일하면 됨)
 const SYNCID_VIEWCLIP = "viewclip:state-changed";
@@ -50,17 +51,23 @@ export class ViewToolProvider implements UiItemsProvider {
         const vp = IModelApp.viewManager.selectedView as ScreenViewport | undefined;
         if (!vp) return;
 
-        const w = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("ViewClipWidget");
+        const clipW  = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("ViewClipWidget");
+        const swipeW = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("SwipingComparisonWidget");
 
         if (!this._enabled) {
+          // ▶ View Clip ON → Swiping OFF + 하단 패널을 ViewClip 탭으로
+          swipeW?.setWidgetState(WidgetState.Closed);
+          this._swipeOpen = false;
+          SwipingComparisonApi.disableModelsCompare(vp);
+          
           // ON
           ViewClipApi.addExtentsClipRange(vp);
-          w?.setWidgetState(WidgetState.Open);
+          clipW?.setWidgetState(WidgetState.Open);     //해당 탭으로 전환
           this._enabled = true;
         } else {
           // OFF
           ViewClipApi.clearClips(vp);
-          w?.setWidgetState(WidgetState.Closed);
+          clipW?.setWidgetState(WidgetState.Closed);   //패널 숨김
           this._enabled = false;
         }
 
@@ -71,19 +78,28 @@ export class ViewToolProvider implements UiItemsProvider {
 
     const swipeToggle = ToolbarItemUtilities.createActionItem({
       id: "swipe-toggle",
-      icon: "icon-compare", // 아이콘은 원하는 걸로
+      icon: "S", // 아이콘은 원하는 걸로
       label: "Swiping Compare",
       execute: async () => {
-        const w = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("SwipingComparisonWidget");
-        if (!w) return;
-        const opening = !this._swipeOpen;
-        w.setWidgetState(opening ? WidgetState.Open : WidgetState.Closed);
-        this._swipeOpen = opening;
+        const vp = IModelApp.viewManager.selectedView as ScreenViewport | undefined;
+        if (!vp) return;
 
-        // 닫힐 때 안전 정리
-        if (!opening) {
-          const vp = IModelApp.viewManager.selectedView as ScreenViewport | undefined;
-          if (vp) SwipingComparisonApi.disableModelsCompare(vp);
+        const clipW  = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("ViewClipWidget");
+        const swipeW = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("SwipingComparisonWidget");
+
+        const opening = !this._swipeOpen;
+        if (opening) {
+         // ▶ Swiping ON → View Clip OFF + 하단 패널을 Swiping 탭으로
+         ViewClipApi.clearClips(vp);
+         clipW?.setWidgetState(WidgetState.Closed);
+         this._enabled = false;
+
+         swipeW?.setWidgetState(WidgetState.Open);    // 해당 탭으로 전환
+          this._swipeOpen = true;
+        } else {
+         swipeW?.setWidgetState(WidgetState.Closed);  // 패널 숨김
+          this._swipeOpen = false;
+          SwipingComparisonApi.disableModelsCompare(vp);
         }
       },
     });
@@ -107,15 +123,26 @@ export class ViewToolProvider implements UiItemsProvider {
     location: StagePanelLocation,
     _section?: StagePanelSection
   ): ReadonlyArray<Widget> {
-    if (location !== StagePanelLocation.Bottom)
-      return [];
+    const widgets: Widget[] = [];
 
-    return [{
-      id: "ViewClipWidget",
-      label: "View Clip",
-      defaultState: WidgetState.Closed,   // ✅ 기본 닫힘 = 토글 OFF와 일치
-      // AppUI 5.5에서 JSX 직접 제공 가능
-      content: <ViewClipWidget />,
-    }];
+    if (location === StagePanelLocation.Bottom) {
+      widgets.push({
+        id: "ViewClipWidget",
+        label: "View Clip",
+        defaultState: WidgetState.Closed,
+        content: <ViewClipWidget />,
+      });
+    }
+
+    if (location === StagePanelLocation.Bottom) {
+      widgets.push({
+        id: "SwipingComparisonWidget",
+        label: "Swiping Comparison Selector",
+        defaultState: WidgetState.Closed,             // 초기 Off
+        content: <SwipingComparisonWidget appContainerId="AppContainer" />, // id 못찾으면 위젯 내부가 viewport 부모로 fallback
+      });
+    }
+
+    return widgets;
   }
 }

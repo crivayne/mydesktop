@@ -21,7 +21,7 @@ import "./ViewClip.scss";
 export const ViewClipWidget = () => {
     const iModelConnection = useActiveIModelConnection();
     const viewport = useActiveViewport();
-    const [showClipBlockState, setShowClipBlockState] = React.useState<boolean>(true);
+    const [showClipBlockState, setShowClipBlockState] = React.useState<boolean>(false);
     const [clipPlaneState, setClipPlaneState] = React.useState<string>("None");
 
     useEffect(() => {
@@ -110,7 +110,7 @@ export class ViewClipWidgetProvider implements UiItemsProvider {
                 {
                     id: "ViewClipWidget",
                     label: "View Clip Selector",
-                    defaultState: WidgetState.Open,
+                    defaultState: WidgetState.Closed,
                     content: <ViewClipWidget />,
                 }
             );

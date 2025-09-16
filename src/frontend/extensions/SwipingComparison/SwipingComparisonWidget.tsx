@@ -8,10 +8,10 @@ import {
   UiItemsProvider,
   useActiveViewport,
   Widget,
-  WidgetState
+  WidgetState,
 } from "@itwin/appui-react";
 import { Frustum } from "@itwin/core-common";
-import { ScreenViewport } from "@itwin/core-frontend";
+import { ScreenViewport, IModelApp } from "@itwin/core-frontend";
 import { Point3d } from "@itwin/core-geometry";
 import { useEffectSkipFirst } from "@itwin/core-react";
 import { Id64String } from "@itwin/core-bentley";
@@ -36,8 +36,9 @@ function usePrevious<T>(value: T) {
 }
 
 const INITIAL_LOCK_STATE = false;
+const ENABLE_REALITY_DATA = false; // Electron 데스크톱에서 Reality Data 미사용이면 false
 
-const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
+export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
   const viewport = useActiveViewport();
 
   const [viewRect, setViewRect] = React.useState<DOMRect>();
@@ -53,6 +54,9 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
   const [leftModel, setLeftModel] = React.useState<Id64String | undefined>();
   const [rightModel, setRightModel] = React.useState<Id64String | undefined>();
   const [modelOptions, setModelOptions] = React.useState<SelectOption<Id64String>[]>([]);
+
+  const [widgetActive, setWidgetActive] = React.useState(false);
+
 
   // Clean up on dismount
   useEffectSkipFirst(() => SwipingComparisonApi.teardown(), []);
@@ -78,8 +82,8 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
   useEffect(() => viewport?.iModel.selectionSet.onChanged.addListener((ev) => console.debug(...ev.set.elements.entries())), [viewport]);
 
   useEffect(() => {
-    if (!appContainer.current || appContainer.current.id !== props.appContainerId)
-      appContainer.current = document.getElementById(props.appContainerId);
+    const el = document.getElementById(props.appContainerId);
+    if (el) appContainer.current = el;  // ✅ 찾았을 때만 교체 (fallback 보존)
   }, [props]);
 
   useEffect(() => {
@@ -115,14 +119,14 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
     setFrustum(SwipingComparisonApi.getFrustum(viewport));
     setDividerLeftState(dividerPos);
 
+    // 기본 플래그만 켜고, Reality Data 부착은 필요할 때만 (그리고 활성화된 경우에만)
     viewport.viewFlags = viewport.viewFlags.copy({ clipVolume: true });
-
-    // Attach reality data so it's visible in the viewport
-    SwipingComparisonApi.attachRealityData(viewport)
-      .catch((error) => {
-        // eslint-disable-next-line no-console
-        console.error(error);
+    if (ENABLE_REALITY_DATA && comparisonState === ComparisonType.RealityData) {
+      SwipingComparisonApi.attachRealityData(viewport).catch((e) => {
+        // Electron IPC 핸들러가 없으면 그냥 스킵
+        console.warn("[Swiping] RealityData attach skipped:", e);
       });
+    }
   }, [viewport]);
 
   /** Reacting to the viewport resizing. */
@@ -172,12 +176,12 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
 
   // 모드 전환/언마운트 시 정리
   useEffect(() => {
-    if (comparisonState !== ComparisonType.Models && viewport)
+     if (viewport && comparisonState !== ComparisonType.Models)
       disableModelsCompare(viewport);
 
     return () => {
       if (viewport)
-        disableModelsCompare(viewport);
+        disableModelsCompare(viewport); // 언마운트도 정리
     };
   }, [comparisonState, viewport]);
 
@@ -207,17 +211,61 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
     .filter(([_, value]: any) => typeof value !== "string")
     .map(([key, value]) => ({ value: (value as ComparisonType), label: key }));
 
+  // 위젯이 마운트되었을 때만 true, 언마운트 시 false
+  React.useEffect(() => {
+    setWidgetActive(true);
+    return () => setWidgetActive(false);
+  }, []);
+  
+  // 이미 있는 appContainer ref 사용 가정
+  // const appContainer = React.useRef<HTMLElement | null>(null);
+
+  // "찾았을 때만" 교체 — 못 찾으면 기존(fallback) 그대로 둠
+  React.useEffect(() => {
+    // 1) props의 id로 우선 시도
+    if (props.appContainerId) {
+      const el = document.getElementById(props.appContainerId);
+      if (el) {
+        appContainer.current = el;
+        return;
+      }
+    }
+
+    // 2) 못 찾았으면 현재 viewport의 canvas 부모를 fallback으로
+    const vp = IModelApp.viewManager.selectedView as ScreenViewport | undefined;
+    if (!appContainer.current && vp?.canvas?.parentElement) {
+      appContainer.current = vp.canvas.parentElement;
+    }
+  }, [props.appContainerId]);
+
   return (
     <>
-      {/** Using the createPortal to */}
-      {appContainer.current && ReactDOM.createPortal(
-        (<>
-          {/** The divider to move left and right. */}
-          {viewRect && dividerLeftState && !isLockedState &&
-            <DividerComponent sideL={dividerLeftState - viewRect.left} bounds={viewRect} onDragged={_onDividerMoved} />
-          }
-        </>), appContainer.current)
-      }
+      {/* ▼ Divider는 "위젯이 활성 + 조건 충족"일 때만 포털로 띄움 */}
+      {appContainer.current && widgetActive && (
+        <>
+          {(() => {
+            const showDivider =
+              !!viewRect &&
+              dividerLeftState !== undefined &&
+              !isLockedState; // 잠금이면 숨김
+
+            return showDivider
+              ? ReactDOM.createPortal(
+                  <>
+                    {/* The divider to move left and right. */}
+                    <DividerComponent
+                      sideL={dividerLeftState - viewRect.left}
+                      bounds={viewRect}
+                      onDragged={_onDividerMoved}
+                    />
+                  </>,
+                  appContainer.current
+                )
+              : null;
+          })()}
+        </>
+      )}
+      
       <div className="sample-options">
         <ToggleSwitch
           label="Lock dividing plane"
@@ -239,7 +287,7 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
                 value={leftModel}
                 onChange={(v: Id64String) => {
                   setLeftModel(v);
-                  setModelPair(v, rightModel); // ✅ API에 전달
+                  if (!rightModel || rightModel !== v) setModelPair(v, rightModel); //API에 전달
                 }}
                 options={modelOptions}
               />
@@ -248,7 +296,7 @@ const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => {
                 value={rightModel}
                 onChange={(v: Id64String) => {
                   setRightModel(v);
-                  setModelPair(leftModel, v); // ✅ API에 전달
+                  if (!leftModel || leftModel !== v) setModelPair(leftModel, v); // API에 전달
                 }}
                 options={modelOptions}
               />
