@@ -323,7 +323,6 @@ export function disableModelsCompare(viewport?: ScreenViewport): void {
     viewport.changeModelDisplay(_baseHiddenModels, true);
     _baseHiddenModels = [];
   }
-
   // overlay vp 제거
   if (_overlayVp) {
     if (_disconnectSync) { _disconnectSync(); _disconnectSync = undefined; }
