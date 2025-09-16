@@ -31,7 +31,7 @@ import {
 import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
 import RenderSettings from "../viewer/RenderSettings";
-import { ViewClipToggleProvider } from "../../extensions/viewclip/ViewClipToggleProvider";
+import { ViewToolProvider } from "../../extensions/ViewToolProvider";
 
 function PickDialog<T>(props: {
   open: boolean;
@@ -279,7 +279,7 @@ export const ViewerRoute = () => {
               })],
             },
             new MeasureToolsUiItemsProvider(),
-            new ViewClipToggleProvider(),
+            new ViewToolProvider(),
           ]}
           enablePerformanceMonitors={true}
           selectionStorage={unifiedSelectionStorage}

@@ -125,7 +125,7 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include",           // 쿠키 쓰면 필요, 아니어도 무방
+      //credentials: "include",           // 쿠키 쓰면 필요, 아니어도 무방
       body: JSON.stringify(data),
     });
     const text = await r.text();
