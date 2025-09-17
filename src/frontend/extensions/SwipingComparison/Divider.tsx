@@ -81,21 +81,29 @@ export class DividerComponent extends React.Component<DividerComponentProps, {}>
   }
 
   private _mouseDownDraggable = (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+    // 브라우저/뷰어 기본 동작 차단 + 버블링 차단
     e.preventDefault();
-    document.addEventListener("mousemove", this._mouseMoveDraggable);
-    document.addEventListener("mouseup", this._mouseUpDraggable);
+    e.stopPropagation();
+
+    // 드래그 시작 상태 저장
     this._oldPosition = e.clientX;
     this._elem = e.currentTarget;
+
+    // 전역 캡처 리스너로 등록(기본 툴보다 먼저 먹음)
+    window.addEventListener("mousemove", this._mouseMoveDraggable, true); // capture
+    window.addEventListener("mouseup", this._mouseUpDraggable, true);     // capture
   };
 
   private _mouseMoveDraggable = (e: MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     if (undefined === this._elem) return;
 
-    const newPosition = this.limitToBounds(this._elem.offsetLeft - (this._oldPosition - e.clientX));
+    const next = this.limitToBounds(this._elem.offsetLeft - (this._oldPosition - e.clientX));
     this._oldPosition = this.limitToBounds(e.clientX);
 
-    this.setState({ left: newPosition });
+    // 상태 갱신 후 onDragged 콜백을 즉시 호출
+    this.setState({ left: next }, () => this.onDraggedCallback());
   };
 
   private onDraggedCallback(): void {
@@ -105,56 +113,77 @@ export class DividerComponent extends React.Component<DividerComponentProps, {}>
       this.props.onDragged(left, right);
   }
 
-  private _mouseUpDraggable = (_e: MouseEvent) => {
-    document.removeEventListener("mousemove", this._mouseMoveDraggable);
-    document.removeEventListener("mouseup", this._mouseUpDraggable);
+  private _mouseUpDraggable = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    window.removeEventListener("mousemove", this._mouseMoveDraggable, true);
+    window.removeEventListener("mouseup", this._mouseUpDraggable, true);
+
+    // 드래그 종료 시 한 번 더 콜백(선택)
+    this.onDraggedCallback();
   };
 
   // There must be a better way to set panels on either side of the divider.
   public render() {
+    const left = this.state.left;
+    const { bounds } = this.props;
+
     return (
       <>
-        <div id={"divider-panel-left"} className={"divider-panel"}
+        <div
+          id={"divider-panel-left"}
+          className={"divider-panel"}
           style={{
             position: "absolute",
-            top: this.props.bounds.top,
-            height: this.props.bounds.height,
-            left: this.props.bounds.left,
-            width: this.state.left,
+            top: bounds.top,
+            height: bounds.height,
+            left: bounds.left,
+            width: left,
             overflow: "hidden",
           }}
         >
           {this.props.leftChildren}
         </div>
-        <div className={"dividing-line"}
-          ref={(element) => this._container = element}
-          style={{
-            left: this.state.left,
-            top: this.props.bounds.top,
-            height: this.props.bounds.height,
-            position: "absolute",
-            width: 6,
-            cursor: "ew-resize",
-            zIndex: 101,            // ✅ 오버레이(zIndex 20)보다 위
-            pointerEvents: "auto",  // ✅ 드래그 가능
-          }}
-          id={"divider-div"}
-          role="presentation"
-          onMouseDown={this._mouseDownDraggable}
-        >
-          {this.props.menuChildren ? this.props.menuChildren : <DividerHandleComponent />}
-        </div>
-        <div id={"divider-panel-right"} className={"divider-panel"}
+
+        <div
+          id={"divider-panel-right"}
+          className={"divider-panel"}
           style={{
             position: "absolute",
-            top: this.props.bounds.top,
-            height: this.props.bounds.height,
-            left: this.state.left,
-            width: this.props.bounds.right - this.state.left,
+            top: bounds.top,
+            height: bounds.height,
+            left,
+            width: bounds.right - left,
             overflow: "hidden",
           }}
         >
           {this.props.rightChildren}
+        </div>
+
+        <div
+          className={"dividing-line"}
+          ref={(el) => (this._container = el)}
+          style={{
+            position: "absolute",
+            left,
+            top: bounds.top,
+            height: bounds.height,
+            width: 6,
+            cursor: "ew-resize",
+            zIndex: 1001,
+            pointerEvents: "auto",
+            background: "rgba(180,180,180,0.7)",
+            borderLeft: "1px solid rgba(255,255,255,0.8)",
+            borderRight: "1px solid rgba(0,0,0,0.2)",
+          }}
+          id={"divider-div"}
+          role="presentation"
+          onMouseDown={this._mouseDownDraggable}
+          onClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
+          onDoubleClick={(ev) => { ev.preventDefault(); ev.stopPropagation(); }}
+        >
+          {this.props.menuChildren ? this.props.menuChildren : <DividerHandleComponent />}
         </div>
       </>
     );

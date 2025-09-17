@@ -20,7 +20,14 @@ import React, { useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
 import { DividerComponent } from "./Divider";
 import "./SwipingComparison.scss";
-import SwipingComparisonApi, { ComparisonType, compareModels, disableModelsCompare, setModelPair } from "./SwipingComparisonApi";
+import SwipingComparisonApi, { 
+  ComparisonType, 
+  compareModels, 
+  disableModelsCompare, 
+  setModelPair,
+  isEnabled,
+  onEnabledChange, 
+} from "./SwipingComparisonApi";
 
 
 interface SwipingComparisonWidgetProps { appContainerId: string }
@@ -56,6 +63,7 @@ export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => 
   const [modelOptions, setModelOptions] = React.useState<SelectOption<Id64String>[]>([]);
 
   const [widgetActive, setWidgetActive] = React.useState(false);
+  const [swipeOn, setSwipeOn] = React.useState(false);
 
 
   // Clean up on dismount
@@ -164,15 +172,34 @@ export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => 
     }
   }, [dividerLeftState, viewport]);
 
-  // 스와이프 마우스/포인터 이동 시
-  useEffect(() => {
-    if (viewport && screenPointState && frustum) {
-      if (comparisonState === ComparisonType.Models)
-        compareModels(isLockedState ? undefined : screenPointState, viewport);
-      else
-        SwipingComparisonApi.compare(isLockedState ? undefined : screenPointState, viewport, comparisonState);
-    }
-  }, [comparisonState, frustum, screenPointState, viewport, isLockedState]);
+  // 뷰가 바뀔 때 compare 실행. viewport가 없으면 등록/해제 안 함.
+  React.useEffect(() => {
+    if (!viewport) return;
+
+    // TS에 확실히 알려주기 위해 좁힌 값을 클로저에 캡처
+    const v = viewport;
+
+    const listener = () => {
+      if (!swipeOn) return;
+      try {
+        if (comparisonState === ComparisonType.Models)
+          compareModels(isLockedState ? undefined : screenPointState, v);
+        else
+          SwipingComparisonApi.compare(isLockedState ? undefined : screenPointState, v, comparisonState);
+      } catch (e) {
+        console.warn("[Swiping] compare failed:", e);
+      }
+    };
+
+    // 등록
+    v.onViewChanged.addListener(listener);
+
+    // 중요: cleanup은 "함수"를 반환해야 하고, 그 함수는 다시 아무것도 반환하지 않아야 함 (boolean 반환 금지)
+    return () => {
+      // removeListener는 boolean을 반환하지만, 우리는 그 값을 반환하지 않는다.
+      v.onViewChanged.removeListener(listener);
+    };
+  }, [viewport, swipeOn, comparisonState, isLockedState, screenPointState]);
 
   // 모드 전환/언마운트 시 정리
   useEffect(() => {
@@ -216,6 +243,15 @@ export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => 
     setWidgetActive(true);
     return () => setWidgetActive(false);
   }, []);
+
+  React.useEffect(() => {
+    setSwipeOn(isEnabled());
+    const off = onEnabledChange(setSwipeOn); // () => void 를 돌려줌
+    return () => {
+      // React cleanup은 void만 허용 → 호출만 하고 반환값(없음)을 그대로 둠
+      if (typeof off === "function") off();
+    };
+  }, []);
   
   // 이미 있는 appContainer ref 사용 가정
   // const appContainer = React.useRef<HTMLElement | null>(null);
@@ -238,34 +274,54 @@ export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => 
     }
   }, [props.appContainerId]);
 
+  //모델 리스트 로딩에 재시도 가드
+  React.useEffect(() => {
+    if (!viewport) return;
+    let cancelled = false;
+    let tries = 0;
+
+    const load = async () => {
+      try {
+        const props = await viewport.iModel.models.queryProps({ from: "bis.SpatialModel" });
+        if (cancelled) return;
+        const opts = props.filter(p => p.id).map(p => ({ value: p.id!, label: (p as any).name ?? p.id! }));
+        setModelOptions(opts);
+      } catch (err) {
+        if (cancelled) return;
+        const msg = String(err ?? "");
+        if ((/db is not open/i).test(msg) && tries < 10) {
+          tries++;
+          setTimeout(load, 250);
+        } else {
+          console.warn("[Swiping] load models failed:", err);
+        }
+      }
+    };
+
+    load();
+    return () => { cancelled = true; };
+  }, [viewport]);
+
   return (
     <>
-      {/* ▼ Divider는 "위젯이 활성 + 조건 충족"일 때만 포털로 띄움 */}
-      {appContainer.current && widgetActive && (
-        <>
-          {(() => {
-            const showDivider =
-              !!viewRect &&
-              dividerLeftState !== undefined &&
-              !isLockedState; // 잠금이면 숨김
+      {/* Divider 포털: 위젯 활성 + Swiping enable + host 존재 + 표시조건 충족일 때만 */}
+      {appContainer.current && widgetActive && swipeOn && (() => {
+        const showDivider = !!viewRect && dividerLeftState !== undefined && !isLockedState;
+        return showDivider
+          ? ReactDOM.createPortal(
+              <>
+                <DividerComponent
+                  sideL={dividerLeftState - viewRect.left}
+                  bounds={viewRect}
+                  onDragged={_onDividerMoved}
+                />
+              </>,
+              appContainer.current
+            )
+          : null;
+      })()}
 
-            return showDivider
-              ? ReactDOM.createPortal(
-                  <>
-                    {/* The divider to move left and right. */}
-                    <DividerComponent
-                      sideL={dividerLeftState - viewRect.left}
-                      bounds={viewRect}
-                      onDragged={_onDividerMoved}
-                    />
-                  </>,
-                  appContainer.current
-                )
-              : null;
-          })()}
-        </>
-      )}
-      
+      {/* 옵션 패널 */}
       <div className="sample-options">
         <ToggleSwitch
           label="Lock dividing plane"
@@ -279,29 +335,42 @@ export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => 
           disabled={undefined === viewport}
           options={options}
         />
-          {/* Models 모드일 때만 좌/우 모델 선택 표시 */}
-          {comparisonState === ComparisonType.Models && (
-            <>
-              <LabeledSelect
-                label="Left Model"
-                value={leftModel}
-                onChange={(v: Id64String) => {
-                  setLeftModel(v);
-                  if (!rightModel || rightModel !== v) setModelPair(v, rightModel); //API에 전달
-                }}
-                options={modelOptions}
-              />
-              <LabeledSelect
-                label="Right Model"
-                value={rightModel}
-                onChange={(v: Id64String) => {
-                  setRightModel(v);
-                  if (!leftModel || leftModel !== v) setModelPair(leftModel, v); // API에 전달
-                }}
-                options={modelOptions}
-              />
-            </>
-          )}
+        {/* Models 모드일 때만 좌/우 모델 선택 표시 */}
+        {comparisonState === ComparisonType.Models && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "12px",
+              alignItems: "end",
+              marginTop: "8px",
+            }}
+          >
+            <LabeledSelect
+              label="Left Model"
+              value={leftModel}
+              onChange={(v: Id64String) => {
+                setLeftModel(v);
+                if (!rightModel || rightModel !== v) setModelPair(v, rightModel);
+                // ✅ 두 모델이 모두 정해졌고 스와이프 켜져 있으면 즉시 비교 시작
+                if (viewport && isEnabled() && rightModel && rightModel !== v)
+                  requestAnimationFrame(() => compareModels(undefined, viewport));
+              }}
+              options={modelOptions}
+            />
+            <LabeledSelect
+              label="Right Model"
+              value={rightModel}
+              onChange={(v: Id64String) => {
+                setRightModel(v);
+                if (!leftModel || leftModel !== v) setModelPair(leftModel, v);
+                if (viewport && isEnabled() && leftModel && leftModel !== v)
+                  requestAnimationFrame(() => compareModels(undefined, viewport));
+              }}
+              options={modelOptions}
+            />
+          </div>
+        )}
         <Alert type="informational" className="instructions no-icon">
           Drag the divider to compare the two halves of the view. Try rotating the view with the "Lock dividing Plane" toggle on and off.
         </Alert>

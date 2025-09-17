@@ -37,11 +37,32 @@ import {
 import { RealityDataAccessClient, RealityDataResponse } from "@itwin/reality-data-client";
 import { Id64String } from "@itwin/core-bentley";
 
+const DEBUG_SWIPE = true;  // 필요 없으면 false
+
 export enum ComparisonType {
   Wireframe = 0,
   RealityData = 1,
   Models = 2, //  추가
 }
+
+// modul scope state
+let _enabled = false;
+const _evtName = "swipe:enabled";
+
+let _leftModelId: Id64String | undefined;
+let _rightModelId: Id64String | undefined;
+
+let _overlayDiv: HTMLDivElement | undefined;
+let _overlayVp: ScreenViewport | undefined;
+let _disconnectSync: (() => void) | undefined;
+
+let _baseHiddenModels: Id64String[] = [];  // base vp에서 임시로 끈 모델들 복구용
+let _offResize: (() => void) | undefined;
+let _offViewChanged: (() => void) | undefined;
+let _offDpr: (() => void) | undefined;  //DPR 감지 해제용
+let _resizeObserver: ResizeObserver | undefined; // 컨테이너 크기 감시자
+let _creatingOverlay = false;      // 중복 생성 가드
+let _rafId: number | undefined;    // clipPath 업데이트 턴당 1회로 제한
 
 export default class SwipingComparisonApi {
   private static _provider: SampleTiledGraphicsProvider | undefined;
@@ -172,7 +193,7 @@ export default class SwipingComparisonApi {
   }
 
   /** Get first available reality models and attach it to displayStyle. */
-  public static async attachRealityData(viewport: Viewport) {
+  public static async attachRealityData(viewport: Viewport) { /*
     const imodel = viewport.iModel;
     const style = viewport.displayStyle.clone();
     const RealityDataClient = new RealityDataAccessClient();
@@ -205,142 +226,16 @@ export default class SwipingComparisonApi {
     for (const crmProp of availableModels) {
       style.attachRealityModel(crmProp);
       viewport.displayStyle = style;
-    }
+    } */
   }
 
   /** Set the transparency of the reality models using the Feature Override API. */
-  public static setRealityModelTransparent(vp: Viewport, transparent: boolean): void {
+  public static setRealityModelTransparent(vp: Viewport, transparent: boolean): void { /*
     const override: FeatureAppearanceProps = { transparency: (transparent ?? false) ? 1 : 0 };
     vp.displayStyle.settings.contextRealityModels.models.forEach((model) => {
       model.appearanceOverrides = model.appearanceOverrides ? model.appearanceOverrides.clone(override) : FeatureAppearance.fromJSON(override);
-    });
+    }); */
   }
-}
-
-// 내부 상태 저장용
-let _leftModelId: Id64String | undefined;
-let _rightModelId: Id64String | undefined;
-
-let _overlayDiv: HTMLDivElement | undefined;
-let _overlayVp: ScreenViewport | undefined;
-let _disconnectSync: (() => void) | undefined;
-let _baseHiddenModels: Id64String[] = [];  // base vp에서 임시로 끈 모델들 복구용
-
-export function setModelPair(left?: Id64String, right?: Id64String) {
-  _leftModelId = left;
-  _rightModelId = right;
-  if (left && right && left === right) {
-  // 동일 선택이면 비교를 끄고 종료
-  disableModelsCompare(/* viewport optional */);
-  return;
-}
-}
-
-async function createOverlayViewport(base: ScreenViewport): Promise<ScreenViewport | undefined> {
-  const host = getHostContainer(base);
-  if (!host) return undefined;
-  if (_overlayVp && !_overlayVp.isDisposed) return _overlayVp;
-
-  // host가 static이면 overlay 절대배치가 안 먹을 수 있어 보정
-  const cs = window.getComputedStyle(host);
-  if (cs.position === "static")
-    (host as HTMLElement).style.position = "relative";
-
-  const overlay = document.createElement("div");
-  overlay.style.position = "absolute";
-  overlay.style.inset = "0";
-  overlay.style.pointerEvents = "none";   // 입력은 base vp로 통과
-  overlay.style.zIndex = "20";
-  host.appendChild(overlay);
-  _overlayDiv = overlay;
-
-  const clonedView = base.view.clone();                         // 뷰 복제
-  const vp2 = ScreenViewport.create(overlay, clonedView);       // 오버레이 VP 생성
-  IModelApp.viewManager.addViewport(vp2);
-
-  // 카메라/줌 등 프러스텀 동기화
-  _disconnectSync = connectViewportFrusta([base, vp2]);  // 필요 시 connectViewportViews로 변경 가능
-
-  _overlayVp = vp2;
-  return vp2;
-}
-
-// 경로 A: 오버레이용 보조 뷰포트 생성/해제/동기화 유틸
-export async function ensureOverlayForModels(vp: ScreenViewport): Promise<void> {
-  if (!_leftModelId || !_rightModelId)
-    return;
-
-  // base vp는 Left 모델만
-  if (_baseHiddenModels.length === 0) {
-    const models = allDisplayedModels(vp);
-    _baseHiddenModels = models.filter((id) => id !== _leftModelId);
-  }
-  showOnlyModel(vp, _leftModelId);
-
-  // overlay vp는 Right 모델만
-  const ov = await createOverlayViewport(vp);
-  if (!ov) return;
-  showOnlyModel(ov, _rightModelId);
-}
-
-export function updateOverlayClip(screenX: number | undefined, vp: ScreenViewport): void {
-  if (!_overlayDiv) return;
-  const rect = vp.canvas.getBoundingClientRect();
-  const x = screenX !== undefined
-    ? Math.max(rect.left, Math.min(rect.right, screenX))
-    : (rect.left + rect.right) / 2;   // 포인트 없으면 중앙
-  const leftPx = x - rect.left;
-  // 오버레이(오른쪽)만 보이도록 왼쪽을 잘라냄
-  _overlayDiv.style.clipPath = `inset(0px 0px 0px ${leftPx}px)`;
-}
-
-/** Widget에서 드래그 포인트 갱신 시 호출 */
-export function compareModels(screenPoint: Point3d | undefined, viewport: ScreenViewport): void {
-    if (!_leftModelId || !_rightModelId || _leftModelId === _rightModelId) {
-    disableModelsCompare(viewport);
-    return;
-  }
-  void ensureOverlayForModels(viewport);
-  updateOverlayClip(screenPoint?.x, viewport);
-}
-
-function getHostContainer(vp: ScreenViewport): HTMLElement | null {
-  return vp.canvas?.parentElement ?? null;
-}
-
-function allDisplayedModels(vp: Viewport): Id64String[] {
-  if (!vp.view.isSpatialView())
-    return [];
-  const ids: Id64String[] = [];
-  for (const id of vp.view.modelSelector.models)
-    ids.push(id);
-  return ids;
-}
-
-function showOnlyModel(vp: Viewport, modelId: Id64String): void {
-  const models = allDisplayedModels(vp);
-  const toHide = models.filter((id) => id !== modelId);
-  if (toHide.length)
-    vp.changeModelDisplay(toHide, false);     // 표시 중인 모델들 끄기
-  vp.changeModelDisplay([modelId], true);     // 대상 모델만 켜기
-}
-
-/** 모드 해제/위젯 닫기 시 정리 */
-export function disableModelsCompare(viewport?: ScreenViewport): void {
-  // base vp 모델 복구
-  if (viewport && _baseHiddenModels.length) {
-    viewport.changeModelDisplay(_baseHiddenModels, true);
-    _baseHiddenModels = [];
-  }
-  // overlay vp 제거
-  if (_overlayVp) {
-    if (_disconnectSync) { _disconnectSync(); _disconnectSync = undefined; }
-    IModelApp.viewManager.dropViewport(_overlayVp);  // dispose 포함
-    _overlayVp = undefined;
-  }
-  if (_overlayDiv?.parentElement)
-    _overlayDiv.parentElement.removeChild(_overlayDiv);
-  _overlayDiv = undefined;
 }
 
 abstract class SampleTiledGraphicsProvider implements TiledGraphicsProvider {
@@ -432,4 +327,247 @@ class ComparisonRealityModelProvider extends SampleTiledGraphicsProvider {
     // Makes the reality model visible again in the viewport.
     SwipingComparisonApi.setRealityModelTransparent(vp, false);
   }
+}
+
+// --- enable/disable 통지 ---
+export function setEnabled(on: boolean) {
+  _enabled = on;
+  // 위젯이 즉시 반응하도록 브라우저 이벤트로 알림
+  window.dispatchEvent(new CustomEvent(_evtName, { detail: on }));
+  // 끌 때는 깨끗이 정리
+  if (!on) disableModelsCompare(/* viewport optional */);
+}
+
+export function isEnabled() { return _enabled; }
+
+export function onEnabledChange(handler: (on: boolean) => void): () => void {
+  const fn = (e: Event) => handler(!!(e as CustomEvent).detail);
+  window.addEventListener(_evtName, fn);
+  return () => window.removeEventListener(_evtName, fn);
+}
+
+export function setModelPair(left?: Id64String, right?: Id64String) {
+  _leftModelId = left;
+  _rightModelId = right;
+  if (left && right && left === right) {
+  // 동일 선택이면 비교를 끄고 종료
+  disableModelsCompare(/* viewport optional */);
+  return;
+  }
+}
+
+function forceViewportCanvasSize(vp: ScreenViewport, hostRect: DOMRect) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = Math.max(1, Math.round(hostRect.width));
+  const cssH = Math.max(1, Math.round(hostRect.height));
+  const devW = Math.max(1, Math.round(cssW * dpr));
+  const devH = Math.max(1, Math.round(cssH * dpr));
+
+  const c = vp.canvas as HTMLCanvasElement;
+  // CSS 크기
+  c.style.width = `${cssW}px`;
+  c.style.height = `${cssH}px`;
+  // 실제 버퍼 크기
+  if (c.width !== devW) c.width = devW;
+  if (c.height !== devH) c.height = devH;
+
+  // ✅ 여기서 vp.onResized() 같은 호출은 하지 않음.
+  // (리사이즈는 ResizeObserver/base.onResized에서 overlay를 파기하고 재생성)
+}
+
+
+// --- 오버레이 VP 생성 (크기 0 가드 + 리사이즈/뷰 변경 동기화 포함) ---
+export async function createOverlayViewport(base: ScreenViewport): Promise<ScreenViewport | undefined> {
+  if (_overlayVp && !_overlayVp.isDisposed) return _overlayVp;
+
+  const host = getHostContainer(base);
+  if (!host) return undefined;
+
+  const rect = host.getBoundingClientRect();
+  if (rect.width <= 1 || rect.height <= 1) return undefined;
+
+  // host 배치 보정
+  const cs = window.getComputedStyle(host);
+  if (cs.position === "static") (host as HTMLElement).style.position = "relative";
+
+  // overlay root
+  const overlay = document.createElement("div");
+  overlay.style.position = "absolute";
+  overlay.style.inset = "0";
+  overlay.style.pointerEvents = "none"; // 부모는 none
+  overlay.style.overflow = "hidden";    // clip-path와 함께 안전
+  overlay.style.zIndex = "20";
+  host.appendChild(overlay);
+  _overlayDiv = overlay;
+
+  // overlay VP
+  const clonedView = base.view.clone();
+  const vp2 = ScreenViewport.create(overlay, clonedView);
+  IModelApp.viewManager.addViewport(vp2);
+
+  // ⛔ 가장 중요: 캔버스 자체도 이벤트 차단 (HTML은 pointer-events 상속 안 됨)
+  const ovCanvas = vp2.canvas as HTMLCanvasElement;
+  ovCanvas.style.pointerEvents = "none";
+
+  // 크기 강제 동기(버퍼/스타일)
+  forceViewportCanvasSize(vp2, rect);
+
+  // 우측 모델만
+  if (_rightModelId) showOnlyModel(vp2, _rightModelId);
+
+  // 중앙 분할 초기값
+  updateOverlayClip(undefined, base);
+
+  // 뷰/카메라 동기화 (changeView → 우측 모델 재적용)
+  _offViewChanged?.();
+  const viewListener = () => {
+    try {
+      vp2.changeView(base.view.clone());
+      if (_rightModelId) showOnlyModel(vp2, _rightModelId);
+    } catch { /* noop */ }
+  };
+  base.onViewChanged.addListener(viewListener);
+  _offViewChanged = () => base.onViewChanged.removeListener(viewListener);
+
+  // 리사이즈/레이아웃/DPR 변화 시 overlay 파기 → 다음 compare에서 재생성
+  const destroyOverlay = () => {
+    try {
+      if (_overlayVp) { IModelApp.viewManager.dropViewport(_overlayVp); _overlayVp = undefined; }
+      if (_overlayDiv?.parentElement) _overlayDiv.parentElement.removeChild(_overlayDiv);
+      _overlayDiv = undefined;
+    } catch { /* noop */ }
+  };
+
+  _offResize?.();
+  const resizeListener = (_vp: Viewport) => destroyOverlay();
+  base.onResized.addListener(resizeListener);
+  _offResize = () => base.onResized.removeListener(resizeListener);
+
+  _resizeObserver?.disconnect();
+  _resizeObserver = new ResizeObserver(() => destroyOverlay());
+  _resizeObserver.observe(host);
+
+  _offDpr?.();
+  const mq = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+  const dprListener = () => destroyOverlay();
+  mq.addEventListener("change", dprListener);
+  _offDpr = () => mq.removeEventListener("change", dprListener);
+
+  _overlayVp = vp2;
+  return vp2;
+}
+
+// --- Models 비교 준비 (동일 모델/비활성 가드) ---
+export async function ensureOverlayForModels(vp: ScreenViewport): Promise<void> {
+  if (!_enabled) return;
+  if (!bothModelsReady()) { disableModelsCompare(vp); return; }
+  if (_creatingOverlay) return;
+
+  _creatingOverlay = true;
+  try {
+    // base에 Left만
+    if (_baseHiddenModels.length === 0) {
+      const models = allDisplayedModels(vp);
+      _baseHiddenModels = models.filter((id) => id !== _leftModelId);
+    }
+    if (_leftModelId) showOnlyModel(vp, _leftModelId);
+
+    // overlay에 Right만
+    const ov = await createOverlayViewport(vp);
+    if (!ov) return;
+    if (_rightModelId) showOnlyModel(ov, _rightModelId);
+  } finally {
+    _creatingOverlay = false;
+  }
+}
+
+// --- 클립 업데이트 (오른쪽만 보이도록 왼쪽을 잘라냄) ---
+export function updateOverlayClip(screenX: number | undefined, vp: ScreenViewport): void {
+  if (_rafId) cancelAnimationFrame(_rafId);
+  _rafId = requestAnimationFrame(() => {
+    _rafId = undefined;
+    if (!_overlayDiv) return;
+    const r = vp.canvas.getBoundingClientRect();
+    const x = screenX !== undefined ? Math.max(r.left, Math.min(r.right, screenX))
+                                    : (r.left + r.right) / 2;
+    const leftPx = x - r.left;
+
+    // 오른쪽만 보이도록 왼쪽 영역을 잘라냄
+    const clip = `polygon(${leftPx}px 0, 100% 0, 100% 100%, ${leftPx}px 100%)`;
+    _overlayDiv.style.clipPath = clip;
+
+    if (DEBUG_SWIPE) {
+      // drag 중 스팸이 심하면 DEBUG_SWIPE를 false로 꺼도 됩니다.
+      // 최근 1~2회만 보고 싶으면 throttle 넣어도 됩니다.
+      console.log("[Swiping] clip leftPx=", Math.round(leftPx), "rect=", r.width, r.height);
+    }
+  });
+}
+
+// --- 드래그/마우스 움직임에 따른 비교 엔트리 ---
+export function compareModels(screenPoint: Point3d | undefined, viewport: ScreenViewport): void {
+  if (!_enabled) return;
+  if (!bothModelsReady()) { disableModelsCompare(viewport); return; }
+  try {
+    void ensureOverlayForModels(viewport);
+    updateOverlayClip(screenPoint?.x, viewport);
+  } catch (err) {
+    // 백엔드 오류(예: db is not open) 등은 즉시 복구 루트로
+    console.warn("[Swiping] compareModels error:", err);
+    disableModelsCompare(viewport);
+    setEnabled(false);
+  }
+}
+
+// --- 내부 유틸 ---
+function getHostContainer(vp: ScreenViewport): HTMLElement | null {
+  return vp.canvas?.parentElement ?? null;
+}
+
+function allDisplayedModels(vp: Viewport): Id64String[] {
+  if (!vp.view.isSpatialView())
+    return [];
+  const ids: Id64String[] = [];
+  for (const id of vp.view.modelSelector.models)
+    ids.push(id);
+  return ids;
+}
+
+function showOnlyModel(vp: Viewport, modelId: Id64String): void {
+  const models = allDisplayedModels(vp);
+  const toHide = models.filter((id) => id !== modelId);
+  if (toHide.length)
+    vp.changeModelDisplay(toHide, false);     // 표시 중인 모델들 끄기
+  vp.changeModelDisplay([modelId], true);     // 대상 모델만 켜기
+}
+
+// --- 비교 해제/정리 (View Clip 전환/위젯 닫힘 포함) ---
+export function disableModelsCompare(viewport?: ScreenViewport): void {
+  if (_rafId) { cancelAnimationFrame(_rafId); _rafId = undefined; }
+  _creatingOverlay = false;
+
+  // base VP 모델 가시성 복구
+  if (viewport && _baseHiddenModels.length) {
+    try { viewport.changeModelDisplay(_baseHiddenModels, true); } catch {}
+  }
+  _baseHiddenModels = [];
+
+  // 이벤트 해제
+  try { _offResize?.(); } catch {}  _offResize = undefined;
+  try { _offViewChanged?.(); } catch {} _offViewChanged = undefined;
+  try { _offDpr?.(); } catch {}      _offDpr = undefined;
+
+  // ResizeObserver 해제
+  try { _resizeObserver?.disconnect(); } catch {}
+  _resizeObserver = undefined;
+
+  // overlay VP/DOM 제거
+  if (_overlayVp) { try { IModelApp.viewManager.dropViewport(_overlayVp); } catch {} _overlayVp = undefined; }
+  if (_overlayDiv?.parentElement) { try { _overlayDiv.parentElement.removeChild(_overlayDiv); } catch {} }
+  _overlayDiv = undefined;
+}
+
+// 편의
+function bothModelsReady(): boolean {
+  return !!(_leftModelId && _rightModelId && _leftModelId !== _rightModelId);
 }
