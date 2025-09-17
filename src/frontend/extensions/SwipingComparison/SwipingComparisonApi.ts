@@ -64,6 +64,38 @@ let _resizeObserver: ResizeObserver | undefined; // 컨테이너 크기 감시�
 let _creatingOverlay = false;      // 중복 생성 가드
 let _rafId: number | undefined;    // clipPath 업데이트 턴당 1회로 제한
 
+// ▶ 분할 화면용 상태 (추가)
+let _leftWrap: HTMLDivElement | undefined;      // base 캔버스를 담을 왼쪽 컨테이너
+let _rightWrap: HTMLDivElement | undefined;     // 오른쪽 뷰포트 컨테이너
+let _rightVp: ScreenViewport | undefined;       // 오른쪽 뷰포트
+let _offLeftView: (() => void) | undefined;                 // 좌측 뷰 변경 리스너 해제
+let _offRightView: (() => void) | undefined;                // 우측 뷰 변경 리스너 해제
+let _savedHostCssPosition = "";                 // host CSS 복구용
+
+// 래퍼 스타일 공용함수
+function applyWrapStyle(el: HTMLDivElement) {
+  Object.assign(el.style, {
+    position: "absolute",
+    top: "0",
+    height: "100%",
+    overflow: "hidden",
+    // 🔑 오버레이(HUD)보다 아래에 깔림
+    zIndex: "0",
+    // pointerEvents는 기본 auto 유지 (자식 canvas가 이벤트 받음)
+  } as CSSStyleDeclaration);
+}
+
+function applyRightWrapStyle(el: HTMLDivElement) {
+  Object.assign(el.style, {
+    position: "absolute",
+    top: "0",
+    height: "100%",
+    overflow: "hidden",
+    zIndex: "0",             // HUD가 위로 오도록 낮은 z-index
+    pointerEvents: "none",   // 입력은 기본 VP로만 보냄
+  } as CSSStyleDeclaration);
+}
+
 export default class SwipingComparisonApi {
   private static _provider: SampleTiledGraphicsProvider | undefined;
   private static _viewport?: Viewport;
@@ -350,6 +382,8 @@ export function setModelPair(left?: Id64String, right?: Id64String) {
   _leftModelId = left;
   _rightModelId = right;
   if (left && right && left === right) {
+  console.log("[pair]", _leftModelId, _rightModelId);
+
   // 동일 선택이면 비교를 끄고 종료
   disableModelsCompare(/* viewport optional */);
   return;
@@ -507,16 +541,15 @@ export function updateOverlayClip(screenX: number | undefined, vp: ScreenViewpor
 // --- 드래그/마우스 움직임에 따른 비교 엔트리 ---
 export function compareModels(screenPoint: Point3d | undefined, viewport: ScreenViewport): void {
   if (!_enabled) return;
-  if (!bothModelsReady()) { disableModelsCompare(viewport); return; }
-  try {
-    void ensureOverlayForModels(viewport);
-    updateOverlayClip(screenPoint?.x, viewport);
-  } catch (err) {
-    // 백엔드 오류(예: db is not open) 등은 즉시 복구 루트로
-    console.warn("[Swiping] compareModels error:", err);
-    disableModelsCompare(viewport);
-    setEnabled(false);
+  const host = getHostContainer(viewport);
+  if (!host) return;
+
+  let leftPx: number | undefined;
+  if (screenPoint) {
+    const r = host.getBoundingClientRect();
+    leftPx = Math.max(1, Math.min(r.width - 1, Math.round(screenPoint.x - r.left)));
   }
+  compareModelsByLeft(leftPx, viewport);
 }
 
 // --- 내부 유틸 ---
@@ -543,31 +576,236 @@ function showOnlyModel(vp: Viewport, modelId: Id64String): void {
 
 // --- 비교 해제/정리 (View Clip 전환/위젯 닫힘 포함) ---
 export function disableModelsCompare(viewport?: ScreenViewport): void {
-  if (_rafId) { cancelAnimationFrame(_rafId); _rafId = undefined; }
-  _creatingOverlay = false;
+  // 리스너 해제
+  try { _offLeftView?.(); } catch {} _offLeftView = undefined;
 
-  // base VP 모델 가시성 복구
+  // base 모델 가시성 복구
   if (viewport && _baseHiddenModels.length) {
     try { viewport.changeModelDisplay(_baseHiddenModels, true); } catch {}
   }
   _baseHiddenModels = [];
 
-  // 이벤트 해제
-  try { _offResize?.(); } catch {}  _offResize = undefined;
-  try { _offViewChanged?.(); } catch {} _offViewChanged = undefined;
-  try { _offDpr?.(); } catch {}      _offDpr = undefined;
+  // 오른쪽 VP 제거
+  if (_rightVp) { try { IModelApp.viewManager.dropViewport(_rightVp); } catch {} _rightVp = undefined; }
+  if (_rightWrap?.parentElement) _rightWrap.parentElement.removeChild(_rightWrap);
+  _rightWrap = undefined;
 
-  // ResizeObserver 해제
-  try { _resizeObserver?.disconnect(); } catch {}
-  _resizeObserver = undefined;
-
-  // overlay VP/DOM 제거
-  if (_overlayVp) { try { IModelApp.viewManager.dropViewport(_overlayVp); } catch {} _overlayVp = undefined; }
-  if (_overlayDiv?.parentElement) { try { _overlayDiv.parentElement.removeChild(_overlayDiv); } catch {} }
-  _overlayDiv = undefined;
+  // (선택) 혹시라도 우측이 selectedView였으면 좌측으로 되돌리기
+  if (viewport) { try { IModelApp.viewManager.setSelectedView(viewport); } catch {} }
 }
+
 
 // 편의
 function bothModelsReady(): boolean {
   return !!(_leftModelId && _rightModelId && _leftModelId !== _rightModelId);
 }
+
+async function ensureSplitForModels(base: ScreenViewport, leftPx?: number) {
+  const host = getHostContainer(base);
+  if (!host) return;
+
+  const cs = window.getComputedStyle(host as HTMLElement);
+  if (cs.position === "static") {
+    _savedHostCssPosition = (host as HTMLElement).style.position;
+    (host as HTMLElement).style.position = "relative";
+  }
+
+  const rect = host.getBoundingClientRect();
+  const leftWidth  = Math.max(1, Math.min(rect.width - 1, leftPx ?? rect.width / 2));
+  const rightWidth = Math.max(1, rect.width - leftWidth);
+
+  // 1) 왼쪽 컨테이너 생성 + base 캔버스 붙이기
+  if (!_leftWrap) {
+    _leftWrap = document.createElement("div");
+    applyWrapStyle(_leftWrap);
+    _leftWrap.style.left  = "0";
+    _leftWrap.style.width = `${leftWidth}px`;
+
+    // ✅ host의 맨 앞에 삽입 → HUD/오버레이가 항상 위로 온다
+    host.insertBefore(_leftWrap, host.firstChild ?? null);
+    console.log("[host children]", Array.from(host.children).map(n => (n as HTMLElement).className || n.tagName));
+
+    const c = base.canvas as HTMLCanvasElement;
+    _leftWrap.appendChild(c);
+    c.style.width  = "100%";
+    c.style.height = "100%";
+  } else {
+    _leftWrap.style.width = `${leftWidth}px`;
+  }
+
+
+  // 2) 오른쪽 컨테이너 + 뷰포트 생성
+  if (!_rightWrap) {
+    _rightWrap = document.createElement("div");
+    applyWrapStyle(_rightWrap);
+    _rightWrap.style.left  = `${leftWidth}px`;
+    _rightWrap.style.width = `${rightWidth}px`;
+
+    // ✅ 오른쪽 래퍼도 맨 앞에 삽입 (좌/우 둘 다 래퍼가 항상 뒤층)
+    host.insertBefore(_rightWrap, host.firstChild ?? null);
+
+    const cloned = base.view.clone();
+    _rightVp = ScreenViewport.create(_rightWrap, cloned);
+    IModelApp.viewManager.addViewport(_rightVp);
+
+    const rc = _rightVp.canvas as HTMLCanvasElement;
+    rc.style.width  = "100%";
+    rc.style.height = "100%";
+  } else {
+    _rightWrap.style.left  = `${leftWidth}px`;
+    _rightWrap.style.width = `${rightWidth}px`;
+  }
+
+  // 좌/우 가시성
+  if (_leftModelId)  showOnlyModel(base, _leftModelId);
+  if (_rightVp && _rightModelId) showOnlyModel(_rightVp, _rightModelId);
+
+  // 카메라/프러스텀 동기화 (양방향) – changeView 후 모델 재적용
+  if (!_offLeftView) {
+    const leftListener = () => {
+      if (!_rightVp) return;
+      try {
+        _rightVp.changeView(base.view.clone());
+        if (_rightModelId) showOnlyModel(_rightVp, _rightModelId);
+      } catch {}
+    };
+    base.onViewChanged.addListener(leftListener);
+    _offLeftView = () => base.onViewChanged.removeListener(leftListener);
+  }
+
+  if (_rightVp && !_offRightView) {
+    const rightListener = () => {
+      try {
+        base.changeView(_rightVp!.view.clone());
+        if (_leftModelId) showOnlyModel(base, _leftModelId);
+      } catch {}
+    };
+    _rightVp.onViewChanged.addListener(rightListener);
+    _offRightView = () => _rightVp?.onViewChanged.removeListener(rightListener);
+  }
+}
+
+function updateSplitLayout(screenX: number | undefined, base: ScreenViewport) {
+  const host = getHostContainer(base);
+  if (!host || !_leftWrap || !_rightWrap) return;
+  const rect = host.getBoundingClientRect();
+
+  const x = screenX !== undefined ? Math.max(rect.left + 1, Math.min(rect.right - 1, screenX))
+                                  : rect.left + rect.width / 2;
+  const leftWidth = Math.round(x - rect.left);
+  const rightWidth = Math.max(1, rect.width - leftWidth);
+
+  _leftWrap.style.width  = `${leftWidth}px`;
+  _rightWrap.style.left  = `${leftWidth}px`;
+  _rightWrap.style.width = `${rightWidth}px`;
+
+  // ✅ onResized() 직접 호출 없이, 다음 프레임에서 자동 감지
+}
+
+// 오른쪽 VP 생성/갱신 (Swiping ON 때만 호출)
+async function ensureRightViewport(base: ScreenViewport, leftPx?: number) {
+  const host = getHostContainer(base);
+  if (!host) return;
+
+  const rect = host.getBoundingClientRect();
+  const leftWidth  = Math.max(1, Math.min(rect.width - 1, leftPx ?? Math.round(rect.width / 2)));
+  const rightWidth = Math.max(1, rect.width - leftWidth);
+
+  // 컨테이너
+  if (!_rightWrap) {
+    _rightWrap = document.createElement("div");
+    Object.assign(_rightWrap.style, {
+      position: "absolute",
+      top: "0",
+      height: "100%",
+      overflow: "hidden",
+      zIndex: "0",            // HUD 위에 올라가지 않도록 낮춤
+      pointerEvents: "none",  // 입력은 좌측(base)로만
+    } as CSSStyleDeclaration);
+    // host 맨 앞에 삽입 (항상 뒤층)
+    host.insertBefore(_rightWrap, host.firstChild ?? null);
+  }
+  _rightWrap.style.left  = `${leftWidth}px`;
+  _rightWrap.style.width = `${rightWidth}px`;
+
+  // 보조 VP
+  if (!_rightVp) {
+    const cloned = base.view.clone();
+    _rightVp = ScreenViewport.create(_rightWrap, cloned);
+    IModelApp.viewManager.addViewport(_rightVp);
+    const rc = _rightVp.canvas as HTMLCanvasElement;
+    rc.style.width  = "100%";
+    rc.style.height = "100%";
+    rc.style.pointerEvents = "none";  // 혹시 몰라 한 번 더
+  }
+
+  // ▶ 새 VP가 선택되는 것을 즉시 되돌림 (중요)
+  try { IModelApp.viewManager.setSelectedView(base); } catch {}
+
+  // 좌/우 가시성
+  if (_baseHiddenModels.length === 0) {
+    const all = allDisplayedModels(base);
+    _baseHiddenModels = _leftModelId ? all.filter(id => id !== _leftModelId) : [];
+    if (_baseHiddenModels.length) base.changeModelDisplay(_baseHiddenModels, false);
+  }
+  if (_leftModelId) base.changeModelDisplay([_leftModelId], true);
+  if (_rightModelId && _rightVp) showOnlyModel(_rightVp, _rightModelId);
+
+  // 좌 → 우 카메라 동기화
+  if (!_offLeftView) {
+    const leftListener = () => {
+      if (!_rightVp) return;
+      try {
+        _rightVp.changeView(base.view.clone());
+        // changeView가 모델표시를 덮어쓰므로 재적용
+        if (_rightModelId) showOnlyModel(_rightVp, _rightModelId);
+      } catch {}
+    };
+    base.onViewChanged.addListener(leftListener);
+    _offLeftView = () => base.onViewChanged.removeListener(leftListener);
+  }
+}
+
+function updateRightLayout(screenX: number | undefined, base: ScreenViewport) {
+  if (!_rightWrap) return;
+
+  const host = getHostContainer(base);
+  if (!host) return;
+  const rect = host.getBoundingClientRect();
+
+  const x = screenX !== undefined ? Math.max(rect.left + 1, Math.min(rect.right - 1, screenX))
+                                  : rect.left + rect.width / 2;
+
+  const leftWidth  = Math.round(x - rect.left);
+  const rightWidth = Math.max(1, rect.width - leftWidth);
+
+  _rightWrap.style.left  = `${leftWidth}px`;
+  _rightWrap.style.width = `${rightWidth}px`;
+
+  // 캔버스는 style 100%라 다음 프레임에 자동 반영됨 (onResized 직접 호출하지 않음)
+}
+
+// Divider가 넘기는 '왼쪽 픽셀값(local)'로 갱신
+export function compareModelsByLeft(leftPx: number | undefined, viewport: ScreenViewport): void {
+  if (!_enabled) return;
+  if (!_leftModelId || !_rightModelId || _leftModelId === _rightModelId) {
+    disableModelsCompare(viewport);
+    return;
+  }
+  try {
+    void ensureRightViewport(viewport, leftPx);
+    if (leftPx !== undefined && _rightWrap) {
+      // 레이아웃 즉시 반영
+      const host = getHostContainer(viewport)!;
+      const rect = host.getBoundingClientRect();
+      const clamped = Math.max(1, Math.min(rect.width - 1, Math.round(leftPx)));
+      _rightWrap.style.left  = `${clamped}px`;
+      _rightWrap.style.width = `${Math.max(1, rect.width - clamped)}px`;
+    }
+  } catch (err) {
+    console.warn("[Swiping] compareModelsByLeft error:", err);
+    disableModelsCompare(viewport);
+    setEnabled(false);
+  }
+}
+
