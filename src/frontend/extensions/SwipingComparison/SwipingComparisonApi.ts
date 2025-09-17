@@ -793,15 +793,20 @@ export function compareModelsByLeft(leftPx: number | undefined, viewport: Screen
     return;
   }
   try {
+    // 보조 VP 보장 + 레이아웃 업데이트
     void ensureRightViewport(viewport, leftPx);
+
     if (leftPx !== undefined && _rightWrap) {
-      // 레이아웃 즉시 반영
-      const host = getHostContainer(viewport)!;
+      const host = getHostContainer(viewport);
+      if (!host) return;
       const rect = host.getBoundingClientRect();
       const clamped = Math.max(1, Math.min(rect.width - 1, Math.round(leftPx)));
       _rightWrap.style.left  = `${clamped}px`;
       _rightWrap.style.width = `${Math.max(1, rect.width - clamped)}px`;
     }
+
+    // 혹시 selectedView가 오른쪽으로 넘어가면 즉시 좌측으로 복귀 (안전판)
+    try { IModelApp.viewManager.setSelectedView(viewport); } catch {}
   } catch (err) {
     console.warn("[Swiping] compareModelsByLeft error:", err);
     disableModelsCompare(viewport);

@@ -26,7 +26,8 @@ import SwipingComparisonApi, {
   disableModelsCompare, 
   setModelPair,
   isEnabled,
-  onEnabledChange, 
+  onEnabledChange,
+  compareModelsByLeft
 } from "./SwipingComparisonApi";
 
 
@@ -212,14 +213,25 @@ export const SwipingComparisonWidget = (props: SwipingComparisonWidgetProps) => 
     };
   }, [comparisonState, viewport]);
 
-  const _onDividerMoved = (leftWidth: number, rightWidth: number) => {
-    // leftWidth is relative to the canvas.  We need to track left based on the window
-    const sliderWidth = viewRect!.width - (leftWidth + rightWidth);
-    const left = leftWidth + (sliderWidth / 2);
-    const updatedLeft = left + viewRect!.left;
+  // 기존 setState 로직 유지 + API는 'local-left(px) = 핸들 중앙'으로 전달
+  const _onDividerMoved = React.useCallback((leftWidth: number, rightWidth: number) => {
+    if (!viewRect) return;
 
-    setDividerLeftState(updatedLeft);
-  };
+    // 핸들(슬라이더) 실제 폭 = 전체폭 - (left+right)
+    const sliderWidth = viewRect.width - (leftWidth + rightWidth);
+
+    // 핸들 "중앙"의 local-left(px) (뷰 컨테이너 기준)
+    const midLocalLeft = leftWidth + (sliderWidth / 2);
+
+    // 화면 절대 좌표(렌더링 상태 업데이트용)
+    const midScreenLeft = viewRect.left + midLocalLeft;
+    setDividerLeftState(midScreenLeft);
+
+    // Swiping Compare 동작 (오른쪽 VP 레이아웃 조정)
+    const vp = IModelApp.viewManager.selectedView as ScreenViewport | undefined;
+    if (!vp || !isEnabled()) return;
+    compareModelsByLeft(midLocalLeft, vp);
+  }, [viewRect]);
 
   // 모델 목록 로드 (SpatialModel만 조회)
   useEffect(() => {
