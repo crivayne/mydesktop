@@ -1,13 +1,23 @@
 {
-  "name": "mydesktop",
+  "name": "mydesktop-monorepo",
   "private": true,
+  "version": "0.1.0",
   "workspaces": [
     "apps/*",
-    "packages/*",
-    "server/*"
+    "packages/*"
   ],
   "scripts": {
-    "build": "npm run -w @crivayne/desktop build && npm run -w @crivayne/shared-ui build",
-    "dev": "npm run -w @crivayne/desktop dev"
-  }
+    "build": "pnpm -r run build",
+    "dev": "pnpm -w --filter @crivayne/desktop run start",
+    "lint": "pnpm -r run lint",
+    "clean": "rimraf apps/**/lib apps/**/dist packages/**/lib packages/**/dist",
+    "desktop:start": "pnpm -w --filter @crivayne/desktop run start",
+    "desktop:build": "pnpm -w --filter @crivayne/desktop run build",
+    "web:start": "pnpm -w --filter @crivayne/web run dev",
+    "web:build": "pnpm -w --filter @crivayne/web run build"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1"
+  },
+  "packageManager": "pnpm@9.12.2"
 }

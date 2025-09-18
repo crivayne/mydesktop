@@ -1,18 +1,19 @@
 {
-  "extends": "./node_modules/@itwin/build-tools/tsconfig-base.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "outDir": "./lib"
+    "module": "CommonJS",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "outDir": "lib/backend",
+    "rootDir": "src",
+    "types": ["node", "electron"],
+    "jsx": "react-jsx",
+    "moduleResolution": "node",
+    "noEmit": false
   },
   "include": [
-    "./src/backend/*.ts",
-    "./src/common/*.ts"
+    "src/backend/**/*",
+    "src/common/**/*"
   ],
-  "exclude": [
-    "dist",
-    "lib",
-    "node_modules"
-  ]
+  "exclude": ["src/frontend/**/*", "dist"]
 }

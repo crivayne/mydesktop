@@ -1,8 +1,20 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "lib"
+    "module": "ESNext",
+    "types": ["vite/client", "node", "electron"],
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../..//packages/shared-ui/src/*"]
+    },
+    "noEmit": true,
+    "incremental": true
   },
-  "include": ["src"]
+  "include": [
+    "index.html",
+    "src/frontend/**/*",
+    "src/common/**/*",
+    "src/types/**/*"
+  ],
+  "exclude": ["src/backend/**/*", "lib", "dist"]
 }

@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../..//packages/shared-ui/src/*"]
+    },
+    "noEmit": true,
+    "incremental": true
+  },
+  "include": [
+    "index.html",
+    "src/**/*",
+    "src/types/**/*"
+  ]
+}

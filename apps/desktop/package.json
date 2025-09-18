@@ -1,8 +1,9 @@
 {
-  "name": "itwin-desktop-viewer-template",
+  "name": "@crivayne/desktop",
   "version": "5.0.0",
   "private": true,
   "dependencies": {
+    "@crivayne/shared-ui": "workspace:*",
     "@bentley/icons-generic-webfont": "^1.0.15",
     "@itwin/appui-abstract": "^5.0.0",
     "@itwin/appui-react": "^5.5.0",
@@ -81,15 +82,14 @@
     "vite-plugin-static-copy": "^3.1.0"
   },
   "scripts": {
-    "build": "npm run build:backend && npm run build:frontend",
+    "build": "pnpm run build:backend && pnpm run build:frontend",
     "build:frontend": "vite build",
     "build:backend": "tsc -p tsconfig.backend.json",
+    "start": "pnpm run build:backend && run-p \"start:frontend\" \"electron:debug\"",
+    "start:frontend": "vite",
     "electron": "electron lib/backend/main.js",
     "electron:debug": "cross-env NODE_ENV=development electron --max-old-space-size=8192 lib/backend/main.js",
-    "start": "npm run build:backend && run-p \"start:frontend\" \"electron:debug\"",
-    "start:frontend": "vite",
-    "test": "",
-    "preview": "npm run build:backend && run-p \"preview:frontend\" \"electron:debug\"",
+    "preview": "pnpm run build:backend && run-p \"preview:frontend\" \"electron:debug\"",
     "preview:frontend": "vite preview --port 3000",
     "lint": "eslint ."
   }

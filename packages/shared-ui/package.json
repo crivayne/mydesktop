@@ -1,20 +1,38 @@
 {
-  "name": "@myapp/shared-ui",
+  "name": "@crivayne/shared-ui",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
-  "module": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "files": ["dist"],
-  "scripts": { "build": "tsc -p tsconfig.json" },
-  "peerDependencies": {
-    "react": "^18",
-    "react-dom": "^18",
-    "@itwin/appui-react": "^4",
-    "@itwin/core-frontend": "^4",
-    "@itwin/core-common": "^4",
-    "@itwin/core-bentley": "^4",
-    "@itwin/itwinui-react": "^2"
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "import": "./lib/index.js"
+    }
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@bentley/icons-generic-webfont": "^1.0.15",
+    "@itwin/appui-react": "^5.5.0",
+    "@itwin/core-bentley": "^5.0.0",
+    "@itwin/core-common": "^5.0.0",
+    "@itwin/core-frontend": "^5.0.0",
+    "@itwin/core-react": "^5.5.0",
+    "@itwin/itwinui-react": "^3.18.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "typescript": "~5.6.2"
   }
 }
