@@ -6,7 +6,7 @@
 import { ElectronHost } from "@itwin/core-electron/lib/cjs/ElectronBackend";
 import { IModelHost, IpcHandler } from "@itwin/core-backend";
 import { InternetConnectivityStatus } from "@itwin/core-common";
-import { ElectronMainAuthorization } from "@itwin/electron-authorization/Main";
+//import { ElectronMainAuthorization } from "@itwin/electron-authorization/Main";
 import {
   dialog, 
   Menu,
@@ -16,7 +16,7 @@ import {
   type SaveDialogOptions,
   type SaveDialogReturnValue
 } from "electron";
-import * as minimist from "minimist";
+import minimist from "minimist";
 import { existsSync } from "node:fs";
 
 import {

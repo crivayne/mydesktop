@@ -4,16 +4,25 @@
     "module": "CommonJS",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "outDir": "lib/backend",
+    "outDir": "lib",
     "rootDir": "src",
-    "types": ["node", "electron"],
+    "types": ["node",],
     "jsx": "react-jsx",
     "moduleResolution": "node",
-    "noEmit": false
+    "noEmit": false,
+    "strict": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
   },
   "include": [
     "src/backend/**/*",
     "src/common/**/*"
   ],
-  "exclude": ["src/frontend/**/*", "dist"]
+  "exclude": [
+    "src/frontend/**/*",
+    "dist",
+    "lib",
+    "node_modules"
+  ]
 }

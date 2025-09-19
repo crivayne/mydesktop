@@ -3,5 +3,7 @@
  * See LICENSE.md in the project root for license terms and full copyright notice.
  *--------------------------------------------------------------------------------------------*/
 
-//export * from "./IModelMergeStatusBarItem";
-export {};
+export * from "./ViewToolProvider";
+export * from "./viewclip/ViewClipWidget";
+export * from "./SwipingComparison/SwipingComparisonWidget";
+

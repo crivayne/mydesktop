@@ -10,14 +10,50 @@
     "build": "pnpm -r run build",
     "dev": "pnpm -w --filter @crivayne/desktop run start",
     "lint": "pnpm -r run lint",
-    "clean": "rimraf apps/**/lib apps/**/dist packages/**/lib packages/**/dist",
+    "clean": "pnpm -w dlx rimraf --glob \"apps/**/lib\" \"apps/**/dist\" \"apps/**/node_modules\" \"packages/**/lib\" \"packages/**/dist\" \"packages/**/node_modules\" \"node_modules\" \"pnpm-lock.yaml\" || exit 0",
     "desktop:start": "pnpm -w --filter @crivayne/desktop run start",
     "desktop:build": "pnpm -w --filter @crivayne/desktop run build",
     "web:start": "pnpm -w --filter @crivayne/web run dev",
     "web:build": "pnpm -w --filter @crivayne/web run build"
   },
   "devDependencies": {
-    "rimraf": "^6.0.1"
+    "@itwin/appui-react": "^5.1.8",
+    "@itwin/core-bentley": "^5.1.8",
+    "@itwin/core-common": "^5.1.8",
+    "@itwin/core-frontend": "^5.1.8",
+    "@itwin/core-geometry": "^5.1.8",
+    "@itwin/core-react": "^5.5.0",
+    "@itwin/itwinui-react": "^3.18.0",
+    "@types/dotenv-flow": "^3.2.0",
+    "@types/minimist": "^1.2.0",
+    "@types/node": "^22.18.6",
+    "@types/react": "^18.3.24",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.6.0",
+    "copyfiles": "^2.4.1",
+    "rimraf": "^6.0.1",
+    "typescript": "5.6.3",
+    "vite": "^7.0.4"
   },
-  "packageManager": "pnpm@9.12.2"
+  "packageManager": "pnpm@9.12.2",
+  "dependencies": {
+    "@floating-ui/react": "^0.27.16",
+    "@itwin/core-backend": "^5",
+    "@itwin/core-electron": "^5",
+    "@itwin/ecschema-rpcinterface-impl": "^5",
+    "@itwin/imodels-access-backend": "^6",
+    "@itwin/presentation-backend": "^5",
+    "@itwin/presentation-core-interop": "^1.3.4",
+    "@itwin/reality-data-client": "^1.3.1",
+    "@itwin/viewer-react": "^5.0.1",
+    "@remix-run/router": "^1.23.0",
+    "classnames": "^2.5.1",
+    "dotenv-flow": "^3.3.0",
+    "electron": "^36.0.0",
+    "fuse.js": "^7.1.0",
+    "lodash.isequal": "^4.5.0",
+    "minimist": "^1.2.8",
+    "react-error-boundary": "^4.1.2",
+    "wms-capabilities": "^0.6.0"
+  }
 }

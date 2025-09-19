@@ -34,7 +34,7 @@ import {
   Transform,
   Vector3d,
 } from "@itwin/core-geometry";
-import { RealityDataAccessClient } from "@itwin/reality-data-client";
+
 import { Id64, Id64String } from "@itwin/core-bentley";
 
 const DEBUG_SWIPE = true;

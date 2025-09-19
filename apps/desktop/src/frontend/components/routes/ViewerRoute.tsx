@@ -31,7 +31,7 @@ import {
 import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
 import RenderSettings from "../viewer/RenderSettings";
-import { ViewToolProvider } from "../../extensions/ViewToolProvider";
+import { ViewToolProvider } from "@crivayne/shared-ui";
 
 function PickDialog<T>(props: {
   open: boolean;

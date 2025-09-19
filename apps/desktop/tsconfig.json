@@ -2,11 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "module": "ESNext",
-    "types": ["vite/client", "node", "electron"],
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["../..//packages/shared-ui/src/*"]
+      "@crivayne/shared-ui": ["../../packages/shared-ui/lib/index.d.ts"]
     },
+    "types": ["vite/client", "node",],
     "noEmit": true,
     "incremental": true
   },
@@ -16,5 +16,8 @@
     "src/common/**/*",
     "src/types/**/*"
   ],
-  "exclude": ["src/backend/**/*", "lib", "dist"]
+  "exclude": ["src/backend/**/*", "lib", "dist"],
+  "references": [
+    { "path": "../../packages/shared-ui" }
+  ]
 }
