@@ -4,7 +4,9 @@
     "module": "ESNext",
     "baseUrl": ".",
     "paths": {
-      "@crivayne/shared-ui": ["../../packages/shared-ui/lib/index.d.ts"]
+      "@crivayne/shared-ui": ["../../packages/shared-ui/lib/index.d.ts"],
+      "@shared": ["../../packages/shared-ui/src/index.ts"],
+      "@shared/*": ["../../packages/shared-ui/src/*"]
     },
     "types": ["vite/client", "node",],
     "noEmit": true,
