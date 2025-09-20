@@ -1,0 +1,1 @@
+{"root":["./src/backend/appinfo.ts","./src/backend/usersettings.ts","./src/backend/viewerhandler.ts","./src/backend/main.ts","./src/backend/preload.ts","./src/common/loggercategory.ts","./src/common/viewerconfig.ts"],"version":"5.6.3"}

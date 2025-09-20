@@ -60,7 +60,7 @@ export const viewerRpcs = [
   IModelTileRpcInterface,
   PresentationRpcInterface,
   SnapshotIModelRpcInterface,     // eslint-disable-line @typescript-eslint/no-deprecated
-  ECSchemaRpcInterface
+  ECSchemaRpcInterface,           // (ECSchema 조회에 필요)
 ];
 
 export interface ViewerFile {

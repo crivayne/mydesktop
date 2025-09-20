@@ -16,7 +16,9 @@
     "index.html",
     "src/frontend/**/*",
     "src/common/**/*",
-    "src/types/**/*"
+    "src/types/**/*",
+    "shims/**/*",
+    "types/**/*"
   ],
   "exclude": ["src/backend/**/*", "lib", "dist"],
   "references": [

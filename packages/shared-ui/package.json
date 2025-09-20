@@ -22,7 +22,8 @@
 
   "scripts": {
     "clean": "rimraf lib",
-    "build": "pnpm run clean && tsc -p tsconfig.json && pnpm run copy:styles",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "pnpm run build:ts && pnpm run copy:styles",
     "copy:styles": "copyfiles -u 1 \"src/**/*.scss\" lib",
     "lint": "eslint ."
   },
@@ -38,14 +39,6 @@
     "react-dom": "^18.0.0"
   },
   "devDependencies": {
-    "@itwin/appui-react": "^5.15.0",
-    "@itwin/core-bentley": "^5.1.8",
-    "@itwin/core-common": "^5.1.8",
-    "@itwin/core-frontend": "^5.1.8",
-    "@itwin/core-geometry": "^5.1.8",
-    "@itwin/core-react": "^5.5.0",
-    "@itwin/eslint-plugin": "^5.2.1",
-    "@itwin/itwinui-react": "^3.19.4",
     "@types/node": "^22.18.6",
     "@types/react": "^18.3.24",
     "@types/react-dom": "^18.3.7",
