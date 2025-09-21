@@ -25,7 +25,7 @@ import { SettingsContextProvider } from "../services/SettingsContext";
 import { ViewerRoute } from "./routes";
 import LoginPanel from "../components/login/LoginPanel";
 import ProjectSitePanel from "../components/projects/ProjectSitePanel";
-import RenderSettings from "../components/viewer/RenderSettings";
+import RenderSettings from "../extensions/settings/RenderSettings";
 
 function LoginPage() {
   const navigate = useNavigate();

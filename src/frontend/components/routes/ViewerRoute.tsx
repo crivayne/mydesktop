@@ -23,15 +23,18 @@ import {
   ModelsTreeComponent,
 } from "@itwin/tree-widget-react";
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation,useNavigate } from "react-router-dom";
 import { viewerRpcs, channelName } from "../../../common/ViewerConfig";
 import {
   unifiedSelectionStorage,
 } from "../../../selectionStorage";
 import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
-import RenderSettings from "../viewer/RenderSettings";
+import RenderSettings from "../../extensions/settings/RenderSettings";
 import { ViewToolProvider } from "../../extensions/ViewToolProvider";
+import { SettingsWidgetProvider } from "../../extensions/settings/SettingsWidget";
+import { IssuesWidgetProvider } from "../../extensions/issues/IssuesWidget"
+import { registerNavigator } from "../../services/navigation";
 
 function PickDialog<T>(props: {
   open: boolean;
@@ -89,6 +92,13 @@ export const ViewerRoute = () => {
   const [snapDir, setSnapDir] = useState<string>("");
   const [pendingServerUrl, setPendingServerUrl] = useState<string | null>(null);
   const [showRenderSettings, setShowRenderSettings] = useState(false);
+  
+  const navigate = useNavigate();
+
+  // ★ 라우터가 살아 있는 동안 헬퍼에 등록
+  React.useEffect(() => {
+    registerNavigator((p) => navigate(p));
+  }, [navigate]);
 
   // ✅ 로컬 스냅샷 폴더(.env)
   const SNAP_DIR = (import.meta as any).env?.VITE_SNAPSHOT_DIR?.toString() || "";
@@ -280,6 +290,8 @@ export const ViewerRoute = () => {
             },
             new MeasureToolsUiItemsProvider(),
             new ViewToolProvider(),
+            new SettingsWidgetProvider(),
+            new IssuesWidgetProvider(),
           ]}
           enablePerformanceMonitors={true}
           selectionStorage={unifiedSelectionStorage}
