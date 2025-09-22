@@ -16,6 +16,7 @@ import {
 import type { WidgetStateChangedEventArgs } from "@itwin/appui-react";
 import { Angle, Point3d, Vector3d } from "@itwin/core-geometry";
 import { Alert, Anchor, IconButton, LabeledSelect, ProgressRadial, SelectOption, Tab, Table, Tabs, Text, Tile,Button, Modal, ModalButtonBar, InputGroup } from "@itwin/itwinui-react";
+import { IModelApp, PrimitiveTool, BeButtonEvent, EventHandled } from "@itwin/core-frontend";
 import { MarkerPinDecorator } from "../issues/marker-pin/MarkerPinDecorator";
 import IssuesApi, { LabelWithId } from "./IssuesApi";
 import IssuesClient, { AttachmentMetadataGet, AuditTrailEntryGet, CommentGetPreferReturnMinimal, IssueDetailsGet, IssueGet, IssueChange } from "./IssuesClient";
@@ -89,7 +90,8 @@ const IssuesWidget = () => {
   const [editXYZ, setEditXYZ] = useState<{x?:number,y?:number,z?:number}>({});
   //마커
   const [markerVersion, setMarkerVersion] = useState(0);
-  
+  const [editLinks, setEditLinks] = useState<string[]>([]); // 링크된 elementId 배열
+
 
   /** Initialize Decorator */
   useEffect(() => {
@@ -139,6 +141,38 @@ const IssuesWidget = () => {
   /** Create the issue marker icon, then add the pin at the issue location */
   useEffect(() => {
     async function createMarker(issue: IssueGet) {
+      // 0) 좌표가 없으면 linked elementId들(bis.Element 배열) bbox 중심으로 보정
+      if (!issue.modelPin?.location && iModelConnection) {
+        const raw = issue.sourceEntity?.iModelElement?.elementId as string | undefined;
+
+        // KeySet JSON 또는 공백구분 문자열 둘 다 허용
+        const ids = (() => {
+          if (!raw) return [] as string[];
+          try {
+            const kj = JSON.parse(raw);
+            const arr = kj?.instanceKeys?.["bis.Element"];
+            if (Array.isArray(arr)) return arr.map(String);
+          } catch {
+            return raw.split(/\s+/).filter(Boolean);
+          }
+          return [];
+        })();
+
+        if (ids.length > 0) {
+          try {
+            const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
+            const center = IssuesApi.centerOf(infos);
+            if (center) issue.modelPin = { location: center };
+          } catch {
+            // bbox가 없는(non-geometric) 요소면 마커 생략
+          }
+        }
+      }
+
+      // 1) 좌표가 없다면 더이상 진행하지 않음(마커 못 그림)
+      if (!issue.modelPin?.location) return;
+
+      // 2) 이하 기존 svg/icon 생성 + addDecoratorPoint 동일
       const parser = new DOMParser();
       const svgMap: { [key: string]: HTMLImageElement } = {};
       const issue_marker: string = `
@@ -193,7 +227,7 @@ const IssuesWidget = () => {
       void createMarker(issue);
     }
 
-  }, [applyView, currentIssues, issueDecorator, markerVersion]);
+  }, [applyView, currentIssues, issueDecorator, markerVersion,iModelConnection]);
 
   /** Returns a color corresponding to the status of the issue */
   const issueStatusColor = (issue: IssueGet) => {
@@ -339,6 +373,80 @@ const IssuesWidget = () => {
       setLoading(false);
     }
   }, [siteId, issueFilter, issueState]);
+
+  // KeySet JSON 또는 공백구분 문자열 → elementId 배열
+  function parseElementIds(raw?: string): string[] {
+    if (!raw) return [];
+    try {
+      const kj = JSON.parse(raw);
+      const arr = kj?.instanceKeys?.["bis.Element"];
+      if (Array.isArray(arr)) return arr.map(String);
+    } catch {
+      // 공백 구분 "0x123 0x456" 형태 지원
+      return raw.split(/\s+/).filter(Boolean);
+    }
+    return [];
+  }
+
+  // 선택집합 → elementId 배열
+  function getSelectedElementIds(iModel?: ReturnType<typeof useActiveIModelConnection>): string[] {
+    if (!iModel) return [];
+    const set = iModel.selectionSet;
+    if (!set) return [];
+    return Array.from(set.elements);
+  }
+
+  // elementIds[] → KeySet JSON 문자열(bis.Element)
+  function buildKeySetJSON(ids: string[]): string {
+    return JSON.stringify({ instanceKeys: { "bis.Element": ids } });
+  }
+
+  // 1회성 포인트 선택 툴
+  class OneShotPointTool extends PrimitiveTool {
+    public static toolId = "OneShotPointTool";
+    /** 외부에서 주입하는 resolver */
+    public static resolver?: (pt: Point3d | undefined) => void;
+
+    constructor() { super(); }
+
+    public async onRestartTool(): Promise<void> {
+      await IModelApp.toolAdmin.startDefaultTool();
+    }
+
+    public async onDataButtonDown(ev: BeButtonEvent): Promise<EventHandled> {
+      try {
+        OneShotPointTool.resolver?.(Point3d.fromJSON(ev.point));
+      } finally {
+        await IModelApp.toolAdmin.startDefaultTool();
+      }
+      return EventHandled.Yes;
+    }
+
+    public async onResetButtonUp(_ev: BeButtonEvent): Promise<EventHandled> {
+      try {
+        OneShotPointTool.resolver?.(undefined);
+      } finally {
+        await IModelApp.toolAdmin.startDefaultTool();
+      }
+      return EventHandled.Yes;
+    }
+  }
+
+  /** 외부 헬퍼: 한 점을 픽 (문자열 run) */
+  async function pickPoint(): Promise<Point3d | undefined> {
+    return new Promise<Point3d | undefined>(async (resolve) => {
+      // resolver 주입
+      OneShotPointTool.resolver = resolve;
+
+      // 아직 등록 안되어 있으면 등록
+      if (!IModelApp.tools.find(OneShotPointTool.toolId)) {
+        IModelApp.tools.register(OneShotPointTool);
+      }
+
+      // ✅ 이 버전은 문자열만 받음
+      await IModelApp.tools.run(OneShotPointTool.toolId);
+    });
+  }
 
   useEffect(() => {
     void reloadIssues();
@@ -625,10 +733,26 @@ const IssuesWidget = () => {
 
   // ① Add: 임시 이슈 추가(좌표/엘리먼트ID는 필요시 채워넣기)
   const onAdd = () => setShowAdd(true);
-  const confirmAdd = () => {
+
+  const confirmAdd = async () => {
     const subject = newSubject.trim();
     if (!subject) return;
     const tempId = `tmp-${Date.now()}`;
+    let pin: Point3d | undefined;
+    let links: string[] = [];
+
+    if (iModelConnection) {
+      const ids = getSelectedElementIds(iModelConnection);
+      if (ids.length) {
+        links = ids;
+        try {
+          const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
+          const center = IssuesApi.centerOf(infos);
+          if (center) pin = center;
+        } catch {}
+      }
+    }
+
     const draft: IssueGet = {
       id: tempId,
       subject,
@@ -636,10 +760,24 @@ const IssuesWidget = () => {
       state: "Open",
       type: "Issue",
       displayName: `${tempId} | ${subject}`,
+      modelPin: pin ? { location: pin } : undefined,
+      sourceEntity: links.length ? {
+        iModelElement: { elementId: buildKeySetJSON(links), modelId: "", changeSetId: "", modelName: "" } as any,
+      } : undefined,
     };
     setCurrentIssues((prev) => [draft, ...prev]);
     draftIssuesRef.current = [draft, ...draftIssuesRef.current]; // 임시데이터
-    setPendingIssues((prev) => [...prev, { subject, status: "Open", type: "Issue" }]);
+
+    setPendingIssues((prev) => [
+      ...prev,
+      {
+        subject,
+        status: "Open",
+        type: "Issue",
+        elementId: links.length ? buildKeySetJSON(links) : null,
+        x: pin?.x ?? null, y: pin?.y ?? null, z: pin?.z ?? null,
+      },
+    ]);
     setShowAdd(false);
     setNewSubject("");
   };
@@ -653,13 +791,14 @@ const IssuesWidget = () => {
     setEditDescription(target.description ?? "");
 
     // 원본 elementId 복원 시도 (properties에 없으면 비워둠)
-    const rawElement = target.sourceEntity?.iModelElement?.elementId ? "" : (target as any).elementId;
-    setEditElementId(rawElement || "");
+  const rawKeySet = target.sourceEntity?.iModelElement?.elementId as string | undefined;
+  setEditLinks(parseElementIds(rawKeySet));
 
-    const loc = target.modelPin?.location;
-    setEditXYZ({ x: loc?.x, y: loc?.y, z: loc?.z });
+  // 좌표
+  const loc = target.modelPin?.location;
+  setEditXYZ({ x: loc?.x, y: loc?.y, z: loc?.z });
 
-    setShowEdit(true);
+  setShowEdit(true);
   };
 
   const confirmModify = () => {
@@ -672,13 +811,19 @@ const IssuesWidget = () => {
       subject: editSubject,
       description: editDescription,
       status: editStatus,
-      state: editStatus, // 화면용 파생
+      state: editStatus,
       modelPin: {
         location: (editXYZ.x!=null && editXYZ.y!=null && editXYZ.z!=null)
           ? Point3d.create(editXYZ.x, editXYZ.y, editXYZ.z)
           : t.modelPin?.location,
       },
-      // sourceEntity는 줌용 KeySet JSON 필요하면 그대로 유지
+      sourceEntity: editLinks.length ? {
+        iModelElement: {
+          // KeySet JSON을 elementId에 담아 둠 (getElementKeySet/zoom 에서 사용)
+          elementId: buildKeySetJSON(editLinks),
+          modelId: "", changeSetId: "", modelName: "",
+        } as any,
+      } : undefined,
     };
     setCurrentIssue(next);
     setCurrentIssues(prev => prev.map(it => it.id===t.id ? next : it));
@@ -691,7 +836,7 @@ const IssuesWidget = () => {
         subject: editSubject,
         body: editDescription,
         status: editStatus,
-        elementId: editElementId || null,
+        elementId: editLinks.length ? buildKeySetJSON(editLinks) : null,
         x: editXYZ.x ?? null, y: editXYZ.y ?? null, z: editXYZ.z ?? null,
       }
     ]));
@@ -735,6 +880,54 @@ const IssuesWidget = () => {
       alert(`Save failed: ${e?.message || e}`);
     }
   };
+
+  // 선택한 요소들로 링크 추가(중복 제거) + 중심 좌표 계산해 편집 좌표에 반영
+  const onLinkFromSelection = async () => {
+    if (!iModelConnection) return alert("iModel 연결이 없습니다.");
+    const ids = getSelectedElementIds(iModelConnection);
+    if (ids.length === 0) return alert("선택된 요소가 없습니다.");
+
+    // 링크 추가
+    setEditLinks((prev) => Array.from(new Set([...prev, ...ids])));
+
+    // 중심 좌표 보정
+    try {
+      const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
+      const center = IssuesApi.centerOf(infos);
+      if (center) setEditXYZ({ x: center.x, y: center.y, z: center.z });
+    } catch {}
+  };
+
+  // 특정 링크 하나 제거
+  const onUnlinkOne = (id: string) => {
+    setEditLinks((prev) => prev.filter((v) => v !== id));
+  };
+
+  // 링크 전체 제거
+  const onUnlinkAll = () => setEditLinks([]);
+
+  // 링크의 bbox 중심으로 좌표 맞추기
+  const onCenterFromLinks = async () => {
+    if (!iModelConnection) return;
+    const ids = editLinks;
+    if (ids.length === 0) return alert("링크가 없습니다.");
+    try {
+      const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
+      const center = IssuesApi.centerOf(infos);
+      if (center) setEditXYZ({ x: center.x, y: center.y, z: center.z });
+      else alert("BBox 중심을 계산할 수 없습니다.");
+    } catch (e) {
+      alert("중심 계산 실패");
+    }
+  };
+
+  // 포인트 찍어서 좌표 설정
+  const onPickPoint = async () => {
+    const pt = await pickPoint();
+    if (!pt) return; // 취소
+    setEditXYZ({ x: pt.x, y: pt.y, z: pt.z });
+  };
+
 
   return (
     <>
@@ -885,8 +1078,28 @@ const IssuesWidget = () => {
             <textarea value={editDescription} onChange={(e)=>setEditDescription(e.target.value)} rows={4}/>
           </InputGroup>
 
-          <InputGroup label="Linked elementId">
-            <input value={editElementId} onChange={(e)=>setEditElementId(e.target.value)} placeholder="ex) 0x123..." />
+          <InputGroup label="Linked Elements">
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <Button size="small" onClick={onLinkFromSelection}>Link from Selection</Button>
+                <Button size="small" onClick={onCenterFromLinks}>Center</Button>
+                <Button size="small" onClick={onPickPoint}>Point</Button>
+                <Button size="small" onClick={onUnlinkAll}>Clear</Button>
+              </div>
+
+              {editLinks.length === 0 ? (
+                <Text>&nbsp;No linked elements.</Text>
+              ) : (
+                <div style={{ display: "grid", gap: 4, maxHeight: 140, overflow: "auto", padding: 6, border: "1px solid #4c4c4c", borderRadius: 6 }}>
+                  {editLinks.map((id) => (
+                    <div key={id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <code style={{ fontSize: 12 }}>{id}</code>
+                      <Button size="small" onClick={() => onUnlinkOne(id)}>Unlink</Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </InputGroup>
 
           <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
