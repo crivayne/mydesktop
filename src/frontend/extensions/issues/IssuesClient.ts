@@ -583,7 +583,7 @@ export default class IssuesClient {
       const { apiBase } = JSON.parse(localStorage.getItem("auth") || "null") || {};
       if (!apiBase) return { issues: [] };
 
-      const url = new URL(`${apiBase.replace(/\/+$/,'')}/issues/list.php`);
+      const url = new URL(`${apiBase.replace(/\/+$/,'')}/itwin/api/issues/list.php`);
       url.searchParams.set("siteId", siteId);
       if (type && type !== "all")  url.searchParams.set("type", type);
       if (state && state !== "all") url.searchParams.set("state", state);
@@ -633,7 +633,7 @@ export default class IssuesClient {
     const { apiBase } = JSON.parse(localStorage.getItem("auth") || "null") || {};
     if (!apiBase) throw new Error("apiBase not configured");
 
-    const res = await fetch(`${apiBase.replace(/\/+$/,'')}/issues/save.php`, {
+    const res = await fetch(`${apiBase.replace(/\/+$/,'')}/itwin/api/issues/save.php`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ siteId, userId, issues }),

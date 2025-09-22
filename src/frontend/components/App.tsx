@@ -23,20 +23,28 @@ import { unifiedSelectionStorage } from "../../selectionStorage";
 import { ITwinViewerApp } from "../app/ITwinViewerApp";
 import { SettingsContextProvider } from "../services/SettingsContext";
 import { ViewerRoute } from "./routes";
+import { AuthProvider } from "../services/AuthContext";
+import { useAuth } from "../services/AuthContext";
 import LoginPanel from "../components/login/LoginPanel";
 import ProjectSitePanel from "../components/projects/ProjectSitePanel";
 import RenderSettings from "../extensions/settings/RenderSettings";
 
 function LoginPage() {
   const navigate = useNavigate();
+  const { setAuth } = useAuth();
+  
   return (
     <LoginPanel
       onSuccess={({ id, apiBase, role }) => {
-        // 필요하다면 간단 세션 저장
+        // 1) 컨텍스트/스토리지에 일관된 auth 저장
+        setAuth({ apiBase, userId: id, role }); 
+
+        // (선택) 예전 키 유지가 필요하면 남겨도 OK
         localStorage.setItem("itwin-api-base", apiBase);
         localStorage.setItem("itwin-user-id", id);
         localStorage.setItem("itwin-user-role", role);
-        // 로그인 성공 후 원래 Home으로
+
+        // 2) 라우팅
         navigate("/home");
       }}
     />
@@ -74,19 +82,19 @@ function IpcMenuBridge() {
 
 // SitesPage를 ProjectSitePanel로 연결
 const SitesPage = () => {
+  const { auth } = useAuth();
   const navigate = useNavigate();
-  const userId = localStorage.getItem("itwin-user-id") || "";
-  const apiBase = localStorage.getItem("itwin-api-base") || "";
-  const role = (localStorage.getItem("itwin-user-role") || "user") as "admin" | "user";
-  if (!userId || !apiBase) return <Navigate to="/" replace />;
+  if (!auth?.userId || !auth?.apiBase) return <Navigate to="/" replace />;
 
   return (
     <ProjectSitePanel
-      userId={userId}
-      apiBase={apiBase}
-      isAdmin={role === "admin"}
+      userId={auth.userId}
+      apiBase={auth.apiBase}
+      isAdmin={auth.role === "admin"}
       onOpenSite={({ siteId, siteName }) => {
-        // 모델 없이 뷰어 진입 (siteId만 전달)
+        // Viewer로 이동 + site 정보 저장(TopBar/Issues에서 재사용)
+        localStorage.setItem("siteId", siteId);
+        localStorage.setItem("siteName", siteName ?? "");
         navigate("/viewer", { state: { siteId, siteName } });
       }}
     />
@@ -149,39 +157,40 @@ const App = () => {
   return (
     <ThemeProvider theme="dark" style={{ height: "100%" }}>
       {initialized ? (
-        <BrowserRouter>
-          <SettingsContextProvider>
-            <PageLayout>
-              <MenuVisibilityBridge />
-              <IpcMenuBridge />   {/* 여기 추가 */}
-              <Routes>
-                {/* 패딩 있는 레이아웃 */}
-                <Route element={<PageLayout.Content padded><Outlet /></PageLayout.Content>}>
-                  {/* 앱 시작점: 로그인 */}
-                  <Route path="/" element={<LoginPage />} />
-                  {/* 로그인 후: 기존 ProjectSite 화면 */}
-                  <Route path="/home" element={<SitesPage />} />
-                </Route>
+        <AuthProvider>
+          <BrowserRouter>
+            <SettingsContextProvider>
+              <PageLayout>
+                <MenuVisibilityBridge />
+                <IpcMenuBridge />
+                <Routes>
+                  {/* 패딩 있는 레이아웃 */}
+                  <Route element={<PageLayout.Content padded><Outlet /></PageLayout.Content>}>
+                    {/* 앱 시작점: 로그인 */}
+                    <Route path="/" element={<LoginPage />} />
+                    {/* 로그인 후: 기존 ProjectSite 화면 */}
+                    <Route path="/home" element={<SitesPage />} />
+                  </Route>
+                  {/* 뷰어 영역 */}
+                  <Route
+                    element={
+                      <PageLayout.Content>
+                        <Outlet />
+                      </PageLayout.Content>
+                    }
+                  >
+                    <Route path="/viewer" element={<ViewerRoute />} />
+                  </Route>
 
-                {/* 뷰어 영역 */}
-                <Route
-                  element={
-                    <PageLayout.Content>
-                      <Outlet />
-                    </PageLayout.Content>
-                  }
-                >
-                  <Route path="/viewer" element={<ViewerRoute />} />
-                </Route>
-
-                {/* 기타 경로는 로그인으로 */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </PageLayout>
-            {/* ✅ 전역에서 항상 렌더됨: /home, /viewer 어디서든 열림 */}
-            <RenderSettings open={showRenderSettings} onClose={()=>setShowRenderSettings(false)} />
-          </SettingsContextProvider>
-        </BrowserRouter>
+                  {/* 기타 경로는 로그인으로 */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </PageLayout>
+              {/* ✅ 전역에서 항상 렌더됨: /home, /viewer 어디서든 열림 */}
+              <RenderSettings open={showRenderSettings} onClose={()=>setShowRenderSettings(false)} />
+            </SettingsContextProvider>
+          </BrowserRouter>
+        </AuthProvider>  
       ) : (
         <Flex justifyContent="center" style={{ height: "100%" }}>
           <SvgIModelLoader

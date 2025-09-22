@@ -35,6 +35,7 @@ import { ViewToolProvider } from "../../extensions/ViewToolProvider";
 import { SettingsWidgetProvider } from "../../extensions/settings/SettingsWidget";
 import { IssuesWidgetProvider } from "../../extensions/issues/IssuesWidget"
 import { registerNavigator } from "../../services/navigation";
+import TopBar from "../TopBar";
 
 function PickDialog<T>(props: {
   open: boolean;
@@ -146,6 +147,13 @@ export const ViewerRoute = () => {
   // 라우트 상태 반영 + 서버 URL이면 로컬로 치환
   useEffect(() => {
     const state = location?.state as ViewerRouteState | undefined;
+    if (state?.siteId) {
+      localStorage.setItem("siteId", state.siteId);
+    }
+    if (state?.siteName) {
+      localStorage.setItem("siteName", state.siteName);
+    }
+
     setSiteId(state?.siteId);
     if (state?.filePath) {
       // server url로 들어오는 경우도 있으니 변환 시도
@@ -235,67 +243,72 @@ export const ViewerRoute = () => {
   }, []);
 
   return (
-    <>
+      <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* 상단 고정 바 */}
+      <TopBar siteName={localStorage?.siteName} />
+      
       {filePath ? (
         // ✅ 기존에 쓰던 Viewer JSX를 그대로 두세요 (수정 X)
-        <Viewer
-          rpcInterfaces={viewerRpcs}
-          filePath={filePath}
-          uiProviders={[
-            new ViewerNavigationToolsProvider(),
-            new ViewerContentToolsProvider({ vertical: { measureGroup: false } }),
-            new ViewerStatusbarItemsProvider(),
-            {
-              id: "TreeWidgetUIProvider",
-              getWidgets: () => [createTreeWidget({
-                trees: [
-                  {
-                    id: ModelsTreeComponent.id,
-                    getLabel: () => ModelsTreeComponent.getLabel(),
-                    render: (props) => (
-                      <ModelsTreeComponent
-                        getSchemaContext={(iModel) => iModel.schemaContext}
-                        density={props.density}
-                        selectionStorage={unifiedSelectionStorage}
-                        selectionMode={"extended"}
-                        onPerformanceMeasured={props.onPerformanceMeasured}
-                        onFeatureUsed={props.onFeatureUsed}
-                      />
-                    ),
-                  },
-                  {
-                    id: CategoriesTreeComponent.id,
-                    getLabel: () => CategoriesTreeComponent.getLabel(),
-                    render: (props) => (
-                      <CategoriesTreeComponent
-                        getSchemaContext={(iModel) => iModel.schemaContext}
-                        density={props.density}
-                        selectionStorage={unifiedSelectionStorage}
-                        onPerformanceMeasured={props.onPerformanceMeasured}
-                        onFeatureUsed={props.onFeatureUsed}
-                      />
-                    ),
-                  },
-                ],
-              })],
-            },
-            {
-              id: "PropertyGridUIProvider",
-              getWidgets: () => [createPropertyGrid({
-                autoExpandChildCategories: true,
-                ancestorsNavigationControls: (props) => (<AncestorsNavigationControls {...props} />),
-                contextMenuItems: [(props) => (<CopyPropertyTextContextMenuItem {...props} />)],
-                settingsMenuItems: [(props) => (<ShowHideNullValuesSettingsMenuItem {...props} persist={true} />)],
-              })],
-            },
-            new MeasureToolsUiItemsProvider(),
-            new ViewToolProvider(),
-            new SettingsWidgetProvider(),
-            new IssuesWidgetProvider(),
-          ]}
-          enablePerformanceMonitors={true}
-          selectionStorage={unifiedSelectionStorage}
-        />
+        <div style={{ position: "relative", height: "100%" }}>
+          <Viewer
+            rpcInterfaces={viewerRpcs}
+            filePath={filePath}
+            uiProviders={[
+              new ViewerNavigationToolsProvider(),
+              new ViewerContentToolsProvider({ vertical: { measureGroup: false } }),
+              new ViewerStatusbarItemsProvider(),
+              {
+                id: "TreeWidgetUIProvider",
+                getWidgets: () => [createTreeWidget({
+                  trees: [
+                    {
+                      id: ModelsTreeComponent.id,
+                      getLabel: () => ModelsTreeComponent.getLabel(),
+                      render: (props) => (
+                        <ModelsTreeComponent
+                          getSchemaContext={(iModel) => iModel.schemaContext}
+                          density={props.density}
+                          selectionStorage={unifiedSelectionStorage}
+                          selectionMode={"extended"}
+                          onPerformanceMeasured={props.onPerformanceMeasured}
+                          onFeatureUsed={props.onFeatureUsed}
+                        />
+                      ),
+                    },
+                    {
+                      id: CategoriesTreeComponent.id,
+                      getLabel: () => CategoriesTreeComponent.getLabel(),
+                      render: (props) => (
+                        <CategoriesTreeComponent
+                          getSchemaContext={(iModel) => iModel.schemaContext}
+                          density={props.density}
+                          selectionStorage={unifiedSelectionStorage}
+                          onPerformanceMeasured={props.onPerformanceMeasured}
+                          onFeatureUsed={props.onFeatureUsed}
+                        />
+                      ),
+                    },
+                  ],
+                })],
+              },
+              {
+                id: "PropertyGridUIProvider",
+                getWidgets: () => [createPropertyGrid({
+                  autoExpandChildCategories: true,
+                  ancestorsNavigationControls: (props) => (<AncestorsNavigationControls {...props} />),
+                  contextMenuItems: [(props) => (<CopyPropertyTextContextMenuItem {...props} />)],
+                  settingsMenuItems: [(props) => (<ShowHideNullValuesSettingsMenuItem {...props} persist={true} />)],
+                })],
+              },
+              new MeasureToolsUiItemsProvider(),
+              new ViewToolProvider(),
+              new SettingsWidgetProvider(),
+              new IssuesWidgetProvider(),
+            ]}
+            enablePerformanceMonitors={true}
+            selectionStorage={unifiedSelectionStorage}
+          />
+        </div>  
       ) : (
         // 파일이 아직 없을 때 보여줄 안내 (원래 쓰던 내용 유지/수정)
         <div style={{ padding: 24 }}>
@@ -339,6 +352,6 @@ export const ViewerRoute = () => {
       />
       {/* 설정 패널 */}
       <RenderSettings open={showRenderSettings} onClose={()=>setShowRenderSettings(false)} />
-    </>
+    </div>
   );
 };

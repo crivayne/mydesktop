@@ -242,7 +242,7 @@ export class ViewToolProvider implements UiItemsProvider {
     // ✅ MK(마크) 그룹: Issues 토글
     const issuesToggle = ToolbarItemUtilities.createActionItem({
       id: "issues-toggle",
-      icon: "MK",         // 원하시는 아이콘 문자열/스프라이트로 교체 가능
+      icon: "I",         // 원하시는 아이콘 문자열/스프라이트로 교체 가능
       label: "Issues",
       execute: async () => {
         const front = UiFramework.frontstages.activeFrontstageDef;

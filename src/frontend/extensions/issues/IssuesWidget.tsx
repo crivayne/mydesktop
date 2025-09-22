@@ -10,22 +10,38 @@ import {
   useActiveIModelConnection,
   useActiveViewport,
   Widget,
-  WidgetState
+  WidgetState,
+  UiFramework,
 } from "@itwin/appui-react";
+import type { WidgetStateChangedEventArgs } from "@itwin/appui-react";
 import { Angle, Point3d, Vector3d } from "@itwin/core-geometry";
-import { Alert, Anchor, IconButton, LabeledSelect, ProgressRadial, SelectOption, Tab, Table, Tabs, Text, Tile,Button } from "@itwin/itwinui-react";
+import { Alert, Anchor, IconButton, LabeledSelect, ProgressRadial, SelectOption, Tab, Table, Tabs, Text, Tile,Button, Modal, ModalButtonBar, InputGroup } from "@itwin/itwinui-react";
 import { MarkerPinDecorator } from "../issues/marker-pin/MarkerPinDecorator";
 import IssuesApi, { LabelWithId } from "./IssuesApi";
 import IssuesClient, { AttachmentMetadataGet, AuditTrailEntryGet, CommentGetPreferReturnMinimal, IssueDetailsGet, IssueGet, IssueChange } from "./IssuesClient";
 import { useAuth } from "../../services/AuthContext";
 import "./Issues.scss";
 
-const thumbnails: Map<string, Blob> = new Map<string, Blob>();
-
 const IssuesWidget = () => {
-  const { auth } = useAuth();
-  const isAdmin = auth?.role === "admin";
+  type WidgetStateChangedArgs = {
+    widgetState: WidgetState;
+    widgetDef?: { id?: string };
+    // 일부 버전에선 widgetId로만 줌
+    widgetId?: string;
+  };
+  
+  type Row = { prop: string; val: string | undefined };
 
+  const thumbnails: Map<string, Blob> = new Map<string, Blob>();
+
+  // useAuth()가 null일 수 있으니 안전하게 받기 + localStorage 폴백
+  const authCtx = useAuth(); // null일 수 있음
+  const auth = authCtx?.auth ?? (() => {
+    try { return JSON.parse(localStorage.getItem("auth") || "null") || undefined; }
+    catch { return undefined; }
+  })();
+  const isAdmin = auth?.role === "admin";
+  const draftIssuesRef = useRef<IssueGet[]>([]);
   const siteId = React.useMemo(()=> localStorage.getItem("siteId") || "", []); //ViewerRoute에서 로드 시 siteId를 localStorage에 한번 넣어두면 위젯에서 꺼내 쓰기
   const iModelConnection = useActiveIModelConnection();
   const viewport = useActiveViewport();
@@ -59,21 +75,21 @@ const IssuesWidget = () => {
   });
   //변경분 저장용
   const [pendingIssues, setPendingIssues] = React.useState<IssueChange[]>([]);
-
-  useEffect(() => {
-    (async () => {
-      if (!auth?.apiBase || !siteId) return;
-      try {
-        const res = await fetch(`${auth.apiBase}/list.php?siteId=${encodeURIComponent(siteId)}`);
-        const data = await res.json(); // 서버 포맷에 맞게 파싱
-        // data → IssueGet 형태로 맵핑(필드명만 맞춰주면 마커 생성 로직 재사용 가능)
-        // setCurrentIssues(mapped);
-        // allIssues.current = mapped;
-      } catch (e) {
-        console.error("[Issues] load failed:", e);
-      }
-    })();
-  }, [auth?.apiBase, siteId]);
+  // 로딩 스테이트
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
+  //생성 및 수정
+  const [showAdd, setShowAdd] = useState(false);
+  const [newSubject, setNewSubject] = useState("");
+  const [showEdit, setShowEdit] = useState(false);
+  const [editSubject, setEditSubject] = useState("");
+  const [editStatus, setEditStatus] = useState<"Open"|"Closed"|"Draft"|"Deleted">("Open");
+  const [editDescription, setEditDescription] = useState("");
+  const [editElementId, setEditElementId] = useState(""); // 원본 elementId 문자열
+  const [editXYZ, setEditXYZ] = useState<{x?:number,y?:number,z?:number}>({});
+  //마커
+  const [markerVersion, setMarkerVersion] = useState(0);
+  
 
   /** Initialize Decorator */
   useEffect(() => {
@@ -82,41 +98,6 @@ const IssuesWidget = () => {
       IssuesApi.disableDecorations(issueDecorator);
     };
   }, [issueDecorator]);
-
-  useEffect(() => {
-    if (iModelConnection && iModelConnection.iTwinId)
-      setContextId(iModelConnection.iTwinId);
-  }, [iModelConnection, iModelConnection?.iTwinId]);
-
-  /** When iModel is loaded, get issue details */
-  useEffect(() => {
-    (async () => {
-      if (!siteId) return;
-      const type = issueFilter !== "all" ? issueFilter : undefined;
-      const state = issueState !== "all" ? issueState : undefined;
-      const issuesResp = await IssuesClient.getProjectIssues(siteId, type, state);
-
-      const oldIssues: IssueGet[] = [];
-      const promises: Array<Promise<IssueDetailsGet | undefined>> = [];
-
-      issuesResp?.issues?.forEach((issue) => {
-        if (!issue.id) return;
-        const found = allIssues.current.find((v) => v.id === issue.id);
-        if (found) oldIssues.push(found);
-        else promises.push(IssuesClient.getIssueDetails(issue.id));
-      });
-
-      const issueResponses = await Promise.all(promises);
-      const iss = issueResponses
-        .filter((r) => r?.issue)
-        .map((r) => r!.issue as IssueGet);
-
-      const newList = oldIssues.concat(iss);
-      setCurrentIssues(newList);
-      if (allIssues.current.length === 0)
-        allIssues.current = newList;
-    })().catch((error) => console.error(error));
-  }, [siteId, issueState, issueFilter]);
 
   /** Set the preview Images on issue load */
   useEffect(() => {
@@ -208,11 +189,11 @@ const IssuesWidget = () => {
     /** Clear the current points */
     IssuesApi.clearDecoratorPoints(issueDecorator);
 
-    for (const issue of currentIssues) {
+    for (const issue of currentIssues.filter(i => (i.status || '').toLowerCase() !== 'deleted')) {
       void createMarker(issue);
     }
 
-  }, [applyView, currentIssues, issueDecorator]);
+  }, [applyView, currentIssues, issueDecorator, markerVersion]);
 
   /** Returns a color corresponding to the status of the issue */
   const issueStatusColor = (issue: IssueGet) => {
@@ -235,8 +216,8 @@ const IssuesWidget = () => {
       markerFillColor = markerFillColor.slice(1);
     }
     const r = parseInt(markerFillColor.slice(0, 2), 16);
-    const g = parseInt(markerFillColor.slice(2, 6), 16);
-    const b = parseInt(markerFillColor.slice(4, 8), 16);
+    const g = parseInt(markerFillColor.slice(2, 4), 16);
+    const b = parseInt(markerFillColor.slice(4, 6), 16);
     const yiq = (r * 299 + g * 587 + b * 114) / 1000;
 
     // All focus on yellow only
@@ -303,27 +284,65 @@ const IssuesWidget = () => {
 
   //목록 리로드 헬퍼
   const reloadIssues = React.useCallback(async () => {
-    if (!siteId) return;
-    const type = issueFilter !== "all" ? issueFilter : undefined;
-    const state = issueState !== "all" ? issueState : undefined;
-    const issuesResp = await IssuesClient.getProjectIssues(siteId, type, state);
+    if (!auth?.apiBase) {
+    setError("API base URL이 없습니다. (로그인이 필요하거나 auth 저장값이 비어 있음)");
+    return;
+    }
+    if (!siteId) {
+      setError("siteId가 설정되지 않았습니다.");
+      return;
+    }
 
-    const oldIssues: IssueGet[] = [];
-    const promises: Array<Promise<IssueDetailsGet | undefined>> = [];
-    issuesResp?.issues?.forEach((issue) => {
-      if (issue.id) {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const type = issueFilter !== "all" ? issueFilter : undefined;
+      const state = issueState !== "all" ? issueState : undefined;
+
+      const issuesResp = await IssuesClient.getProjectIssues(siteId, type, state);
+
+      const oldIssues: IssueGet[] = [];
+      const promises: Array<Promise<IssueDetailsGet | undefined>> = [];
+
+      issuesResp?.issues?.forEach((issue) => {
+        if (!issue.id) return;
         const found = allIssues.current.find((v) => v.id === issue.id);
         if (found) oldIssues.push(found);
         else promises.push(IssuesClient.getIssueDetails(issue.id));
-      }
-    });
-    const issueResponses = await Promise.all(promises);
-    const iss = issueResponses.filter((r) => r?.issue).map((r) => r!.issue as IssueGet);
+      });
 
-    const newIssueList = oldIssues.concat(iss);
-    setCurrentIssues(newIssueList);
-    if (allIssues.current.length === 0) allIssues.current = newIssueList;
+      const details = await Promise.all(promises);
+      const news = details.filter((r) => r?.issue).map((r) => r!.issue as IssueGet);
+
+      const merged = oldIssues.concat(news);
+
+      // 현재 필터에 맞는 임시이슈만 남기기
+      const filterState = issueState !== 'all' ? issueState : undefined;
+      const filterType  = issueFilter !== 'all' ? issueFilter : undefined;
+      const matchFilter = (iss: IssueGet) => {
+        const st = (iss.state || iss.status || '').toLowerCase();
+        const ty = (iss.type  || '').toString();
+        const notDeleted = (iss.status || '').toLowerCase() !== 'deleted';
+        const okState = !filterState || filterState.toLowerCase() === (st || 'open').toLowerCase();
+        const okType  = !filterType  || ty === filterType;
+        return okState && okType && (!filterState || filterState === 'Deleted' ? true : notDeleted);
+      };
+      const withDrafts = [...draftIssuesRef.current.filter(matchFilter), ...merged];
+
+      setCurrentIssues(withDrafts);
+      if (allIssues.current.length === 0) allIssues.current = withDrafts;
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || "Failed to load issues");
+      // 실패했어도 기존 목록은 남겨둔다
+    } finally {
+      setLoading(false);
+    }
   }, [siteId, issueFilter, issueState]);
+
+  useEffect(() => {
+    void reloadIssues();
+  }, [reloadIssues]);
 
   /** Make the client request when the tab for the issue is selected. */
   useEffect(() => {
@@ -359,29 +378,63 @@ const IssuesWidget = () => {
     }
   }, [activeTab, getIssueAttachments, getIssueAuditTrail, getIssueComments, getLinkedElements]);
 
-  const issueSummaryContent = () => {
-    const columns = [{
-      Header: "Table",
-      columns: [
-        { id: "properties", Header: "Properties", accessor: "prop" },
-        { id: "value", Header: "Value", accessor: "val" },
-      ],
-    }];
-    const data = [
-      { prop: "Id", val: currentIssue?.id },
-      { prop: "Subject", val: currentIssue?.subject },
-      { prop: "Status", val: currentIssue?.status },
-      { prop: "State", val: currentIssue?.state },
-      { prop: "Assignee", val: currentIssue?.assignee?.displayName },
-      { prop: "Due Date", val: currentIssue?.dueDate },
-      { prop: "Description", val: currentIssue?.description },
-      { prop: "Created Date", val: currentIssue?.createdDateTime },
-      { prop: "Created By", val: currentIssue?.createdBy },
-      { prop: "Assignees", val: currentIssue?.assignees?.reduce((currentString, nextAssignee) => `${currentString} ${nextAssignee.displayName},`, "").slice(0, -1) },
-    ];
-    return (<Table className={"table"} columns={columns} data={data} emptyTableContent="No data" density="extra-condensed"></Table>);
-  };
+  useEffect(() => {
+    const remove = UiFramework.frontstages.onWidgetStateChangedEvent.addListener(
+      (args: WidgetStateChangedArgs) => {
+        const wid = args.widgetDef?.id ?? args.widgetId;
+        if (wid !== "IssuesWidget") return;
 
+        const isOpen =
+          args.widgetState === WidgetState.Open ||
+          (WidgetState as any).Visible === args.widgetState; // 일부 버전 호환
+
+        if (!isOpen) {
+          // 패널이 닫히면 마커/데코레이터 숨김
+          IssuesApi.clearDecoratorPoints(issueDecorator);
+          IssuesApi.disableDecorations(issueDecorator);
+        } else {
+          // 다시 열리면 데코레이터 활성화 (마커는 currentIssues effect가 다시 그림)
+          IssuesApi.enableDecorations(issueDecorator);
+          setMarkerVersion(v => v + 1); //마커 다시그리기
+        }
+      }
+    );
+    return () => remove();
+  }, [issueDecorator]);
+
+  const issueSummaryContent = () => {
+    type RowT = { prop: string; val?: string };
+
+    const columns = [
+      { Header: "Properties", accessor: "prop" as const },
+      { Header: "Value",      accessor: "val"  as const },
+    ];
+
+    const data: RowT[] = [
+      { prop: "Id",             val: currentIssue?.id },
+      { prop: "Subject",        val: currentIssue?.subject },
+      { prop: "Status",         val: currentIssue?.status },
+      { prop: "State",          val: currentIssue?.state },
+      { prop: "Assignee",       val: currentIssue?.assignee?.displayName },
+      { prop: "Due Date",       val: currentIssue?.dueDate },
+      { prop: "Description",    val: currentIssue?.description },
+      { prop: "Created Date",   val: currentIssue?.createdDateTime },
+      { prop: "Last Modified",  val: currentIssue?.lastModifiedDateTime },
+      { prop: "Created By",     val: currentIssue?.createdBy },
+      { prop: "Assignees",      val: (currentIssue?.assignees?.map(a => a.displayName).join(", ")) ?? "" },
+    ];
+
+    return (
+      <Table<RowT>
+        className="table"
+        columns={columns}
+        data={data}
+        emptyTableContent="No data"
+        density="extra-condensed"
+      />
+    );
+  };
+  
   const issueLinkedElements = () => {
     if (!iModelConnection || !currentLinkedElements)
       return <></>;
@@ -571,11 +624,10 @@ const IssuesWidget = () => {
   };
 
   // ① Add: 임시 이슈 추가(좌표/엘리먼트ID는 필요시 채워넣기)
-  const onAdd = () => {
-    const subject = prompt("Subject?","New issue");
+  const onAdd = () => setShowAdd(true);
+  const confirmAdd = () => {
+    const subject = newSubject.trim();
     if (!subject) return;
-
-    // 화면 목록에 즉시 반영(가짜 id)
     const tempId = `tmp-${Date.now()}`;
     const draft: IssueGet = {
       id: tempId,
@@ -584,33 +636,67 @@ const IssuesWidget = () => {
       state: "Open",
       type: "Issue",
       displayName: `${tempId} | ${subject}`,
-      // 필요하면 modelPin/location 세팅
     };
     setCurrentIssues((prev) => [draft, ...prev]);
-
-    // 서버로 보낼 변경분 큐에 추가
-    setPendingIssues((prev) => [
-      { subject, status: "Open", type: "Issue" }
-    ]);
+    draftIssuesRef.current = [draft, ...draftIssuesRef.current]; // 임시데이터
+    setPendingIssues((prev) => [...prev, { subject, status: "Open", type: "Issue" }]);
+    setShowAdd(false);
+    setNewSubject("");
   };
 
   // ② Modify: 현재 선택 이슈의 일부 필드 수정(mark as pending)
   const onModify = () => {
     const target = currentIssue;
     if (!target?.id) { alert("수정할 이슈를 먼저 선택하세요."); return; }
+    setEditSubject(target.subject ?? "");
+    setEditStatus(((target.status as any) ?? "Open") as any);
+    setEditDescription(target.description ?? "");
 
-    const nextSubject = prompt("New subject?", target.subject || "");
-    if (!nextSubject || nextSubject === target.subject) return;
+    // 원본 elementId 복원 시도 (properties에 없으면 비워둠)
+    const rawElement = target.sourceEntity?.iModelElement?.elementId ? "" : (target as any).elementId;
+    setEditElementId(rawElement || "");
 
-    // 화면 목록 갱신
-    setCurrentIssues((prev) => prev.map(it => it.id===target.id ? { ...it, subject: nextSubject, displayName: `${it.id} | ${nextSubject}` } : it));
-    setCurrentIssue((prev) => prev ? { ...prev, subject: nextSubject, displayName: `${prev.id} | ${nextSubject}` } : prev);
+    const loc = target.modelPin?.location;
+    setEditXYZ({ x: loc?.x, y: loc?.y, z: loc?.z });
 
-    // 변경분 큐
-    setPendingIssues((prev)=>[
+    setShowEdit(true);
+  };
+
+  const confirmModify = () => {
+    const t = currentIssue;
+    if (!t?.id) return;
+
+    // 화면 즉시 반영
+    const next: IssueGet = {
+      ...t,
+      subject: editSubject,
+      description: editDescription,
+      status: editStatus,
+      state: editStatus, // 화면용 파생
+      modelPin: {
+        location: (editXYZ.x!=null && editXYZ.y!=null && editXYZ.z!=null)
+          ? Point3d.create(editXYZ.x, editXYZ.y, editXYZ.z)
+          : t.modelPin?.location,
+      },
+      // sourceEntity는 줌용 KeySet JSON 필요하면 그대로 유지
+    };
+    setCurrentIssue(next);
+    setCurrentIssues(prev => prev.map(it => it.id===t.id ? next : it));
+
+    // 서버로 보낼 변경분 큐 (DB 컬럼명 기준)
+    setPendingIssues(prev => ([
       ...prev,
-      { id: target.id!, subject: nextSubject }
-    ]);
+      {
+        id: t.id!,
+        subject: editSubject,
+        body: editDescription,
+        status: editStatus,
+        elementId: editElementId || null,
+        x: editXYZ.x ?? null, y: editXYZ.y ?? null, z: editXYZ.z ?? null,
+      }
+    ]));
+
+    setShowEdit(false);
   };
 
   // ③ Delete: 현재 선택 이슈 삭제 마킹 (소프트 삭제 기준)
@@ -642,6 +728,7 @@ const IssuesWidget = () => {
       // 큐 비우고, 목록 재로드
       setPendingIssues([]);
       await reloadIssues();
+      draftIssuesRef.current = [];
       alert(`Saved: upserts=${res.upserts ?? 0}, deletes=${res.deletes ?? 0}`);
     } catch (e:any) {
       console.error(e);
@@ -654,10 +741,10 @@ const IssuesWidget = () => {
       <div className={"issues-widget"} >
         {isAdmin ? (
           <div style={{display:"flex", gap:8, alignItems:"center", padding:"8px 12px"}}>
-            <Button size="small" onClick={() => {onAdd}}>Add</Button>
-            <Button size="small" onClick={() => {onModify}}>Modify</Button>
-            <Button size="small" onClick={() => {onDelete}}>Delete</Button>
-            <Button size="small" styleType="high-visibility" onClick={() => {onSave}}>Save</Button>
+            <Button size="small" onClick={onAdd}>Add</Button>
+            <Button size="small" onClick={onModify}>Modify</Button>
+            <Button size="small" onClick={onDelete}>Delete</Button>
+            <Button size="small" styleType="high-visibility" onClick={onSave}>Save</Button>
           </div>
         ) : null}
         {/** Only display header when issue isn't selected */}
@@ -675,22 +762,36 @@ const IssuesWidget = () => {
           </div>}
 
         {/** When the issues haven't loaded yet, display spinner */}
-        {allIssues.current.length === 0 &&
+        {loading &&
           <div className="issues-widget-loading">
             <ProgressRadial indeterminate={true} size="small"></ProgressRadial>
           </div>
         }
+        {!loading && error && (
+          <Alert type="negative" style={{ margin: 8 }}>
+            {error}
+          </Alert>
+        )}
 
         {/** When there are no issues retrieved from filter. */}
-        {allIssues.current.length !== 0 && currentIssues.length === 0 && <span style={{ color: "#fff", padding: "4px" }}>No Content.</span>}
+        {!loading && !error && currentIssues.length === 0 && (
+          <span style={{ color: "#fff", padding: 4 }}>No Content.</span>
+        )}
 
         {/** When the issues are loaded, display them in a list */}
-        {!currentIssue && currentIssues && Object.keys(previewImages).length > 0 && currentIssues.length > 0 &&
+        {!currentIssue && currentIssues.length > 0 &&
           <div>
             {currentIssues.map((issue: IssueGet) => {
-              const createdDate = issue.createdDateTime ? new Date(issue.createdDateTime).toLocaleDateString() : undefined;
-              const binaryUrl = issue.displayName && previewImages[issue.displayName] ? URL.createObjectURL(previewImages[issue.displayName]) : undefined;
+              const createdDate =
+                (issue.createdDateTime ?? issue.lastModifiedDateTime ?? issue.dueDate)
+                  ? new Date(issue.createdDateTime ?? issue.lastModifiedDateTime ?? issue.dueDate!).toLocaleDateString()
+                  : undefined;
+
+              const binaryUrl = issue.displayName && previewImages[issue.displayName]
+                ? URL.createObjectURL(previewImages[issue.displayName])
+                : undefined;
               const imageStyle = binaryUrl ? { backgroundImage: `url(${binaryUrl})` } : {};
+
               return (
                 <div key={issue.id} className="issue">
                   <div className="issue-preview">
@@ -702,7 +803,9 @@ const IssuesWidget = () => {
                     <div className="issue-status" style={{ borderTop: `14px solid ${issueStatusColor(issue)}`, borderLeft: `14px solid transparent` }} />
                   </div>
                   <div className="issue-info" role="presentation" onClick={() => { setCurrentIssue(issue); setActiveTab(0); }}>
-                    <Text variant="leading" className={"issue-title"}>{`${issue.number} | ${issue.subject}`}</Text>
+                    <Text variant="leading" className={"issue-title"}>
+                      {`${issue.number ?? issue.id ?? ""} | ${issue.subject ?? ""}`}
+                    </Text>
                     <div className="issue-subtitle">
                       <span className={"assignee-display-name"}>{issue.assignee?.displayName}</span>
                       <div className={"created-date"}>
@@ -720,7 +823,7 @@ const IssuesWidget = () => {
         {currentIssue &&
           <div className={"issue-details"}>
             <Text variant="leading" className={"header"}>
-              <IconButton styleType="borderless" size="small" className="back-button" onClick={() => { setCurrentIssue(undefined); setLinkedElements(undefined); }}><span className="icon icon-chevron-left"></span></IconButton>
+              <IconButton label="Back" styleType="borderless" size="small" className="back-button" onClick={() => { setCurrentIssue(undefined); setLinkedElements(undefined); }}><span className="icon icon-chevron-left"></span></IconButton>
               {`${currentIssue.number} | ${currentIssue.subject}`}
             </Text>
 
@@ -738,6 +841,66 @@ const IssuesWidget = () => {
           </div>
         }
       </div>
+      
+      <Modal
+        isOpen={showAdd}
+        title="Add Issue"
+        onClose={() => setShowAdd(false)}
+        closeOnEsc
+        closeOnExternalClick
+      >
+        <div style={{ display: "grid", gap: 8 }}>
+          <InputGroup label="Subject">
+            <input value={newSubject} onChange={(e) => setNewSubject(e.target.value)} />
+          </InputGroup>
+        </div>
+
+        <ModalButtonBar>
+          <Button onClick={() => setShowAdd(false)}>Cancel</Button>
+          <Button styleType="high-visibility" onClick={confirmAdd}>Add</Button>
+        </ModalButtonBar>
+      </Modal>
+      <Modal
+        isOpen={showEdit}
+        title="Modify Issue"
+        onClose={() => setShowEdit(false)}
+        closeOnEsc
+        closeOnExternalClick
+      >
+        <div style={{ display: "grid", gap: 8 }}>
+          <InputGroup label="Subject">
+            <input value={editSubject} onChange={(e) => setEditSubject(e.target.value)} />
+          </InputGroup>
+
+          <InputGroup label="Status">
+            <select value={editStatus} onChange={(e)=>setEditStatus(e.target.value as any)}>
+              <option>Open</option>
+              <option>Closed</option>
+              <option>Draft</option>
+              <option>Deleted</option>
+            </select>
+          </InputGroup>
+
+          <InputGroup label="Description">
+            <textarea value={editDescription} onChange={(e)=>setEditDescription(e.target.value)} rows={4}/>
+          </InputGroup>
+
+          <InputGroup label="Linked elementId">
+            <input value={editElementId} onChange={(e)=>setEditElementId(e.target.value)} placeholder="ex) 0x123..." />
+          </InputGroup>
+
+          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
+            <InputGroup label="X"><input type="number" value={editXYZ.x ?? ''} onChange={(e)=>setEditXYZ(s=>({...s, x: e.target.value ? Number(e.target.value) : undefined}))}/></InputGroup>
+            <InputGroup label="Y"><input type="number" value={editXYZ.y ?? ''} onChange={(e)=>setEditXYZ(s=>({...s, y: e.target.value ? Number(e.target.value) : undefined}))}/></InputGroup>
+            <InputGroup label="Z"><input type="number" value={editXYZ.z ?? ''} onChange={(e)=>setEditXYZ(s=>({...s, z: e.target.value ? Number(e.target.value) : undefined}))}/></InputGroup>
+          </div>
+        </div>
+
+        <ModalButtonBar>
+          <Button onClick={() => setShowEdit(false)}>Cancel</Button>
+          <Button styleType="high-visibility" onClick={confirmModify}>Apply</Button>
+        </ModalButtonBar>
+      </Modal>
     </>
   );
 };
@@ -752,7 +915,7 @@ export class IssuesWidgetProvider implements UiItemsProvider {
         {
           id: "IssuesWidget",
           label: "Issue Selector",
-          defaultState: WidgetState.Floating,
+          defaultState: WidgetState.Hidden,
           content: <IssuesWidget />,
         }
       );
