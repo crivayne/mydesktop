@@ -49,7 +49,7 @@ return (
         justifyContent: "space-between",
         gap: 12,
         padding: "0 12px",
-        background: "#111827",
+        background: "#202020ff",
         borderBottom: "1px solid #1f2937",
         boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
         // 오버레이가 아니므로 pointerEvents는 기본값(클릭 가능)

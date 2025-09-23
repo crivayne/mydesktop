@@ -107,6 +107,7 @@ const IssuesWidget = () => {
   useEffect(() => {
     //IssuesApi.enableDecorations(issueDecorator);
     return () => {
+      IssuesApi.clearDecoratorPoints(issueDecorator);
       IssuesApi.disableDecorations(issueDecorator);
     };
   }, [issueDecorator]);
@@ -555,6 +556,84 @@ const IssuesWidget = () => {
     setEditXYZ({ x: pt.x, y: pt.y, z: pt.z });
   };
 
+  const onCaptureThumb = async () => {
+    if (!siteId) return alert("siteId가 없습니다.");
+    if (!currentIssue?.id) return alert("이슈 ID가 없습니다.");
+    if (String(currentIssue.id).startsWith("tmp-")) {
+      alert("먼저 Save로 이슈를 생성한 뒤(정식 ID 발급), 썸네일을 캡처하세요.");
+      return;
+    }
+    const vp = IModelApp.viewManager.selectedView;
+    if (!vp) return alert("활성 뷰가 없습니다.");
+
+    // 0) 오버레이(마커) 잠깐 끄기 → 아이콘만 찍히는 문제 방지
+    const wasSuspended = IModelApp.viewManager.areDecorationsSuspended;
+    IModelApp.viewManager.setDecoratorSuspended(true);
+    try {
+      // 1) 화면 한 프레임 다시 렌더
+      vp.invalidateRenderPlan();
+      vp.synchWithView();
+      vp.renderFrame();
+
+      // 2) 원본 WebGL 캔버스
+      const glCanvas = vp.canvas as HTMLCanvasElement;
+
+      // 3) 고정 해상도/비율(예: 512x288 = 16:9) 오프스크린 캔버스
+      const W = 512, H = 288;
+      const off = document.createElement("canvas");
+      off.width = W; off.height = H;
+      const ctx = off.getContext("2d")!;
+      // 배경 불투명(검정 배경 방지)
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, W, H);
+
+      // 4) object-fit: cover 처럼 맞춰서 그리기(뷰포트 크기와 무관한 일정 썸네일)
+      const sw = glCanvas.width, sh = glCanvas.height;
+      const sRatio = sw / sh, dRatio = W / H;
+      let sx = 0, sy = 0, sW = sw, sH = sh;
+      if (sRatio > dRatio) {
+        // 원본이 더 가로로 넓음 → 좌우를 크롭
+        sW = Math.floor(sh * dRatio);
+        sx = Math.floor((sw - sW) / 2);
+      } else if (sRatio < dRatio) {
+        // 원본이 더 세로로 김 → 상하를 크롭
+        sH = Math.floor(sw / dRatio);
+        sy = Math.floor((sh - sH) / 2);
+      }
+      ctx.drawImage(glCanvas, sx, sy, sW, sH, 0, 0, W, H);
+
+      // 5) JPG Blob 변환
+      const blob: Blob = await new Promise((resolve, reject) =>
+        off.toBlob((b) => b ? resolve(b) : reject("toBlob failed"), "image/jpeg", 0.9)
+      );
+
+      // 6) 업로드
+      const base = (auth?.apiBase || "").replace(/\/+$/, "");
+      const url = `${base}/itwin/api/issues/uploadThumb.php`;
+      const form = new FormData();
+      form.append("siteId", siteId);
+      form.append("issueId", currentIssue.id);
+      form.append("file", blob, `${currentIssue.id}.jpg`);
+
+      const res = await fetch(url, { method: "POST", body: form });
+      const json = await res.json().catch(()=>({}));
+      if (!res.ok || !json?.success) throw new Error(json?.message || res.statusText);
+
+      // 리스트 썸네일 즉시 갱신
+      if (currentIssue.displayName) {
+        setPreviewImages(prev => ({ ...prev, [currentIssue.displayName!]: blob }));
+      }
+      alert("썸네일을 저장했습니다.");
+    } catch (e:any) {
+      console.error(e);
+      alert(`썸네일 저장 실패: ${e?.message || e}`);
+    } finally {
+      // 7) 오버레이 원복 + 한 프레임 렌더
+      IModelApp.viewManager.setDecoratorSuspended(wasSuspended);
+      vp.invalidateRenderPlan();
+      vp.renderFrame();
+    }
+  };
 
   useEffect(() => {
     void reloadIssues();
@@ -608,10 +687,15 @@ const IssuesWidget = () => {
           // 패널이 닫히면 마커/데코레이터 숨김
           IssuesApi.clearDecoratorPoints(issueDecorator);
           IssuesApi.disableDecorations(issueDecorator);
+          IModelApp.viewManager.setDecoratorSuspended(true);
         } else {
           // 다시 열리면 데코레이터 활성화 (마커는 currentIssues effect가 다시 그림)
+          IModelApp.viewManager.setDecoratorSuspended(false);
           IssuesApi.enableDecorations(issueDecorator);
           setMarkerVersion(v => v + 1); //마커 다시그리기
+          const vp = IModelApp.viewManager.selectedView;
+          vp?.invalidateRenderPlan();
+          vp?.renderFrame();
         }
       }
     );
@@ -674,24 +758,25 @@ const IssuesWidget = () => {
 
   const issueAttachmentsContent = React.useCallback(() => {
     /** grab the comment for the current issue */
+    const dn = currentIssue?.displayName!;
     const attachments = issueAttachments[currentIssue!.displayName!];
     const metaData = issueAttachmentMetaData[currentIssue!.displayName!];
 
-    if (metaData.length === 0)
-      return (<Text>No attachments.</Text>);
-    else if (attachments === undefined)
-      return (<div style={{ display: "flex", placeContent: "center" }}><ProgressRadial indeterminate={true} size="small"></ProgressRadial></div>);
+    // 아직 메타 없음(= 프리뷰만 있거나 아직 로딩 전)
+    if (!metaData) return (<Text>No attachments.</Text>);
+    if (metaData.length === 0) return (<Text>No attachments.</Text>);
+    if (!attachments) return (<div style={{ display: "flex", placeContent: "center" }}><ProgressRadial indeterminate size="small" /></div>);
 
     /** Loop through the dates and put them together in chunks */
     return attachments.map((attachment, index) => {
       const urlObj = URL.createObjectURL(attachment);
       return (
         <Tile
-          key={`${currentIssue?.displayName}_Comments_${index}`}
-          style={{ marginTop: "5px", marginBottom: "5px" }}
-          name={metaData[index].fileName}
-          description={metaData[index].caption}
-          thumbnail={<Anchor href={urlObj} className="thumbnail" download={metaData[index].fileName} style={{ backgroundImage: `url(${urlObj})` }} />}
+          key={`${dn}_att_${index}`}
+          style={{ marginTop: 5, marginBottom: 5 }}
+          name={metaData[index]?.fileName}
+          description={metaData[index]?.caption}
+          thumbnail={<Anchor href={urlObj} className="thumbnail" download={metaData[index]?.fileName} style={{ backgroundImage: `url(${urlObj})` }} />}
         />
       );
     });
@@ -868,6 +953,13 @@ const IssuesWidget = () => {
           const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
           const center = IssuesApi.centerOf(infos);
           if (center) pin = center;
+
+          // ★ 선택이 없거나 center를 못 구했으면, 뷰 프러스텀 중심 사용
+          if (!pin && viewport) {
+            const fr = viewport.view.computeViewRange();
+            const center = fr.low.interpolate(0.5, fr.high);
+            pin = center;
+          }
         } catch {}
       }
     }
@@ -1028,29 +1120,6 @@ const IssuesWidget = () => {
   // 링크 전체 제거
   const onUnlinkAll = () => setEditLinks([]);
 
-  // 링크의 bbox 중심으로 좌표 맞추기
-  const onCenterFromLinks = async () => {
-    if (!iModelConnection) return;
-    const ids = editLinks;
-    if (ids.length === 0) return alert("링크가 없습니다.");
-    try {
-      const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
-      const center = IssuesApi.centerOf(infos);
-      if (center) setEditXYZ({ x: center.x, y: center.y, z: center.z });
-      else alert("BBox 중심을 계산할 수 없습니다.");
-    } catch (e) {
-      alert("중심 계산 실패");
-    }
-  };
-
-  // 포인트 찍어서 좌표 설정
-  const onPickPoint = async () => {
-    const pt = await pickPoint();
-    if (!pt) return; // 취소
-    setEditXYZ({ x: pt.x, y: pt.y, z: pt.z });
-  };
-
-
   return (
     <>
       <div className={"issues-widget"} >
@@ -1113,11 +1182,15 @@ const IssuesWidget = () => {
               return (
                 <div key={issue.id} className="issue">
                   <div className="issue-preview">
-                    {issue.modelView &&
-                      <div className="thumbnail" role="presentation" style={imageStyle} onClick={async () => applyView(issue)}>
-                        <span className="open icon icon-zoom" title={"Locate & Zoom"} />
-                      </div>
-                    }
+                    <div
+                      className="thumbnail"
+                      role="presentation"
+                      style={binaryUrl ? { backgroundImage: `url(${binaryUrl})` } : {}}
+                      onClick={async () => applyView(issue)}   // ← 항상 클릭 시 줌
+                      title="Locate & Zoom"
+                    >
+                      <span className="open icon icon-zoom" />
+                    </div>
                     <div className="issue-status" style={{ borderTop: `14px solid ${issueStatusColor(issue)}`, borderLeft: `14px solid transparent` }} />
                   </div>
                   <div className="issue-info" role="presentation" onClick={() => { setCurrentIssue(issue); setActiveTab(0); }}>
@@ -1240,6 +1313,10 @@ const IssuesWidget = () => {
                 <Button size="small" onClick={onCenterInteractive}>Center</Button>
                 <Button size="small" onClick={onPointInteractive}>Point</Button>
                 <Button size="small" onClick={onUnlinkAll}>Clear</Button>
+
+                <IconButton size="small" title="Capture & Save Thumbnail" onClick={onCaptureThumb}>
+                  <span className="icon icon-camera" />
+                </IconButton>
               </div>
 
               {editLinks.length === 0 ? (

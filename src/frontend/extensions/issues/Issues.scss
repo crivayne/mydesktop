@@ -68,7 +68,8 @@
   }
 
   .issue-preview {
-    width: 78px;
+    width: 100x;
+    height: 80px;
     margin-right: 8px;
     background-color: var(--buic-background-2);
     box-sizing: border-box;
@@ -172,6 +173,7 @@
   background-repeat: no-repeat;
   background-size: cover;
   background-position: center;
+  border-radius: 5px;
   cursor: pointer;
 
   .spinner {

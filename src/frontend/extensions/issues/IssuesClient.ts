@@ -5,6 +5,7 @@
 import { Point3d } from "@itwin/core-geometry";
 
 let _lastListRows: any[] = [];
+let _lastSiteId: string | undefined;
 
 function normalizeBase(raw?: string) {
   const b = (raw || "").trim().replace(/\/+$/, "");
@@ -618,6 +619,8 @@ function rowToIssueSummary(row: any): IssueSummary {
 
 export default class IssuesClient {
   public static async getProjectIssues(siteId: string, type?: string, state?: string): Promise<IssuesList | undefined> {
+    _lastSiteId = siteId; 
+
     try {
       const { apiBase } = JSON.parse(localStorage.getItem("auth") || "null") || {};
       if (!apiBase) return { issues: [] };
@@ -648,14 +651,34 @@ export default class IssuesClient {
     return { issue: rowToIssue(row) };
   }
 
-  /** 첨부 메타 – 서버 미구현이므로 빈 목록 반환 */
-  public static async getIssueAttachments(_id: string): Promise<AttachmentMetadataList | undefined> {
-    return { attachments: [] };
+  /** 첨부 메타 (파일 이름 규칙: <siteId>/<issueId>.jpg) */
+  public static async getIssueAttachments(issueId: string): Promise<AttachmentMetadataList | undefined> {
+    if (!_lastSiteId) return { attachments: [] };
+
+    // ★ 임시 이슈는 아예 썸네일 조회 생략
+    if (issueId.startsWith("tmp-")) {
+      return { attachments: [] };
+    }
+
+    return {
+      attachments: [
+        { id: `${_lastSiteId}/${issueId}.jpg`, fileName: `${issueId}.jpg`, caption: "preview" }
+      ],
+    };
   }
 
-  /** 첨부 파일 – 서버 미구현이므로 undefined */
-  public static async getAttachmentById(_id: string, _attachmentId: string): Promise<Blob | undefined> {
-    return undefined;
+  /** 첨부 파일 */
+  public static async getAttachmentById(_issueId: string, attachmentId: string): Promise<Blob | undefined> {
+    try {
+      const base = apiBase();
+      // 캐시 무효화 쿼리 추가(개발중 캐싱 회피)
+      const url = `${base.replace(/\/+$/,'')}/issues/thumbs.php?name=${encodeURIComponent(attachmentId)}&v=${Date.now()}`;
+      const res = await fetch(url, { method: "GET" });
+      if (!res.ok) return undefined;
+      return await res.blob();
+    } catch {
+      return undefined; // CORS/네트워크 에러도 조용히 무시
+    }
   }
 
   /** 코멘트 – 서버 미구현이므로 빈 목록 */
