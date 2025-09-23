@@ -66,52 +66,50 @@ export default class IssuesApi {
     decorator.clearMarkers();
   }
 
-  // 추가: elementId[]로 라벨 + BBox 조회 (Presentation 라벨 + ECSQL bbox)
+  // elementId[]로 라벨 + BBox 조회 (Presentation 라벨 + ECSQL bbox)
   public static async getElementInfoByIds(iModel: IModelConnection, elementIds: string[]): Promise<LabelWithId[]> {
     if (!elementIds.length) return [];
 
     const inList = elementIds.map((id) => `'${id}'`).join(",");
-
-    // 1) 라벨
     const keys: InstanceKey[] = elementIds.map((id) => ({ className: "bis.Element", id }));
     const labels = await Presentation.presentation.getDisplayLabelDefinitions({ imodel: iModel, keys });
 
-    // 2) bbox (GeometricElement3d에 BBoxLow/High, 없는 애는 null)
-    const rows: any[] = [];
-    const ecsql = `
-      SELECT
-        e.ECInstanceId AS id,
-        ge.BBoxLow    AS low,
-        ge.BBoxHigh   AS high
-      FROM bis.Element e
-      LEFT JOIN bis.GeometricElement3d ge ON ge.ECInstanceId = e.ECInstanceId
-      WHERE e.ECInstanceId IN (${inList})
-    `;
-
-    // 4.x 방식
-    const reader = iModel.createQueryReader(ecsql, undefined, {
-      rowFormat: QueryRowFormat.UseECSqlPropertyNames,
-    });
-    for await (const row of reader) {
-      rows.push(row);
+    // 3D BBox + Origin
+    const rows3d: any[] = [];
+    {
+      const ecsql3d = `
+        SELECT ECInstanceId AS id, BBoxLow AS low, BBoxHigh AS high
+        FROM bis.GeometricElement3d
+        WHERE ECInstanceId IN (${inList})
+      `;
+      const r3 = iModel.createQueryReader(ecsql3d, undefined, { rowFormat: QueryRowFormat.UseECSqlPropertyNames });
+      for await (const row of r3) rows3d.push(row);
     }
 
-    // 3) merge
-    const bboxById = new Map<string, { low?: any; high?: any }>();
-    rows.forEach((r) => bboxById.set(r.id, { low: r.low, high: r.high }));
+    // 2D BBox + Origin(2D는 Placement.Origin 없을 수 있음)
+    const rows2d: any[] = [];
+    {
+      const ecsql2d = `
+        SELECT ECInstanceId AS id, BBoxLow AS low, BBoxHigh AS high
+        FROM bis.GeometricElement2d
+        WHERE ECInstanceId IN (${inList})
+      `;
+      const r2 = iModel.createQueryReader(ecsql2d, undefined, { rowFormat: QueryRowFormat.UseECSqlPropertyNames });
+      for await (const row of r2) rows2d.push(row);
+    }
+
+    const map = new Map<string, { low?: any; high?: any }>();
+    for (const r of rows2d) map.set(r.id, { low: r.low, high: r.high });
+    for (const r of rows3d) map.set(r.id, { low: r.low, high: r.high });
 
     return elementIds.map((id, idx) => {
       const label = labels[idx];
-      const bbox = bboxById.get(id);
-      const range = (bbox?.low && bbox?.high)
-        ? { low: Point3d.fromJSON(bbox.low), high: Point3d.fromJSON(bbox.high) }
+      const info = map.get(id);
+      const range = (info?.low && info?.high)
+        ? { low: Point3d.fromJSON(info.low), high: Point3d.fromJSON(info.high) }
         : undefined;
-      return {
-        ...label,
-        id,
-        range,
-      };
-    });
+      return { ...label, id, range };
+    }) as LabelWithId[];
   }
 
   // KeySet(JSON 문자열) → elementId[] 파서 (UI·서버 양쪽에서 동일 규칙 사용)
@@ -135,26 +133,29 @@ export default class IssuesApi {
 
   // 여러 bbox 합쳐서 전체 중심점
   public static centerOf(infos: LabelWithId[]): Point3d | undefined {
+    // 1) BBox 우선
     const lows: Point3d[] = [];
     const highs: Point3d[] = [];
     for (const info of infos) {
-      if (info.range?.low && info.range?.high) {
-        lows.push(info.range.low);
-        highs.push(info.range.high);
+      if ((info as any).range?.low && (info as any).range?.high) {
+        lows.push((info as any).range.low);
+        highs.push((info as any).range.high);
       }
     }
-    if (!lows.length) return undefined;
-    const min = Point3d.create(
-      Math.min(...lows.map((p) => p.x)),
-      Math.min(...lows.map((p) => p.y)),
-      Math.min(...lows.map((p) => p.z))
-    );
-    const max = Point3d.create(
-      Math.max(...highs.map((p) => p.x)),
-      Math.max(...highs.map((p) => p.y)),
-      Math.max(...highs.map((p) => p.z))
-    );
-    return Point3d.create((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
+    if (lows.length) {
+      const min = Point3d.create(
+        Math.min(...lows.map((p) => p.x)),
+        Math.min(...lows.map((p) => p.y)),
+        Math.min(...lows.map((p) => p.z))
+      );
+      const max = Point3d.create(
+        Math.max(...highs.map((p) => p.x)),
+        Math.max(...highs.map((p) => p.y)),
+        Math.max(...highs.map((p) => p.z))
+      );
+      return Point3d.create((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
+    }
+    return undefined;
   }
 
   // 현재 뷰의 SelectionSet → elementId[]
@@ -186,5 +187,21 @@ export default class IssuesApi {
   public static async getElementCenter(iModel: IModelConnection, elementId: string): Promise<Point3d | undefined> {
     const infos = await this.getElementInfoByIds(iModel, [elementId]);
     return this.centerOf(infos);
+  }
+
+  // 선택 1회 감지
+  public static pickSelectionOnce(iModel: IModelConnection): Promise<string[]> {
+    return new Promise((resolve) => {
+      const initial = new Set<string>(iModel.selectionSet.elements);
+      const handler = () => {
+        const now = Array.from(iModel.selectionSet.elements);
+        // 변경되었거나 뭔가 선택되면 resolve
+        if (now.length && (now.length !== initial.size || now.some((id) => !initial.has(id)))) {
+          iModel.selectionSet.onChanged.removeListener(handler);
+          resolve(now);
+        }
+      };
+      iModel.selectionSet.onChanged.addListener(handler);
+    });
   }
 }

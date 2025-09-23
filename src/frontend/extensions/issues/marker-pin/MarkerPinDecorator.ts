@@ -55,12 +55,6 @@ class SamplePinMarker extends Marker {
     this.setImage(image);
     this.imageOffset = new Point3d(0, Math.floor(this.size.y * .5));
     // END MARKERPINIMAGE
-
-    // START MARKERPINIMAGE
-    // Add an offset so that the pin 'points' at the location, rather than floating in the middle of it
-    this.setImage(image);
-    this.imageOffset = new Point3d(0, Math.floor(this.size.y * .5));
-    // END MARKERPINIMAGE
     this._onMouseButtonCallback = onMouseButtonCallback;
 
     // Keep a pointer back to the marker set
@@ -115,7 +109,7 @@ class SamplePinMarker extends Marker {
 
   /** This method will be called when the user clicks on a marker */
   public onMouseButton(ev: BeButtonEvent): boolean {
-    if (BeButton.Data !== ev.button || !ev.isDown || !ev.viewport || !ev.viewport.view.isSpatialView())
+    if (BeButton.Data !== ev.button || !ev.isDown || !ev.viewport || !ev.viewport.view.is3d())
       return true;
 
     if (this._onMouseButtonCallback) {
@@ -213,7 +207,7 @@ class SampleClusterMarker extends Marker {
   // START CLUSTERMARKERMOUSEBUTTON
   /** This method will be called when the user clicks on a marker */
   public onMouseButton(ev: BeButtonEvent): boolean {
-    if (BeButton.Data !== ev.button || !ev.isDown || !ev.viewport || !ev.viewport.view.isSpatialView())
+    if (BeButton.Data !== ev.button || !ev.isDown || !ev.viewport || !ev.viewport.view.is3d())
       return true;
 
     if (this._onMouseButtonCallback)
@@ -341,10 +335,10 @@ export class MarkerPinDecorator implements Decorator {
     }
     /* This method is called for every rendering frame.  We will reuse our marker sets since the locations and images
        for the markers don't typically change. */
-    if (context.viewport.view.isSpatialView()) {
+    
       this._autoMarkerSet.addDecoration(context);
       this._manualMarkerSet.addDecoration(context);
-    }
+    
   }
   // END DECORATE
 }

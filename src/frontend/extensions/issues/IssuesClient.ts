@@ -6,8 +6,18 @@ import { Point3d } from "@itwin/core-geometry";
 
 let _lastListRows: any[] = [];
 
+function normalizeBase(raw?: string) {
+  const b = (raw || "").trim().replace(/\/+$/, "");
+  if (!b) return "";
+  return b.endsWith("/itwin/api") ? b : (b + "/itwin/api");
+}
+function apiBase(): string {
+  const auth = JSON.parse(localStorage.getItem("auth") || "null") || {};
+  return normalizeBase(auth.apiBase) || normalizeBase((import.meta as any).env?.VITE_PHP_API_BASE || "") || `${location.protocol}//${location.host}/itwin/api`;
+}
+
 export type IssueChange =
- | { id?: string|number; subject?: string; body?: string; type?: string; status?: string; priority?: string; color?: string; assignee?: string; dueDate?: string|null; x?: number|null; y?: number|null; z?: number|null; elementId?: string|null; _deleted?: boolean };
+ | { id?: string|number; subject?: string; body?: string; type?: string; status?: string; state?: string; priority?: string; color?: string; assignee?: string; dueDate?: string|null; x?: number|null; y?: number|null; z?: number|null; elementId?: string|null; _deleted?: boolean };
  
 
 export interface CommentsListPreferReturnMinimal {
@@ -479,7 +489,7 @@ async function postJson<T>(url: string, body: any): Promise<T> {
 function rowToIssue(row: any): IssueGet {
   // state/status 매핑
   const state = (() => {
-    const s = String(row.status || "").toLowerCase();
+    const s = String(row.state ?? row.status ?? "").toLowerCase();
     if (s === "open") return "Open";
     if (s === "closed") return "Closed";
     if (s === "draft") return "Draft";
@@ -503,13 +513,35 @@ function rowToIssue(row: any): IssueGet {
   const pz = row.z != null ? Number(row.z) : undefined;
   const pin = px != null && py != null && pz != null ? { location: Point3d.create(px, py, pz) } : undefined;
 
-  // elementId → KeySet JSON (IssuesApi.getElementKeySet 에 맞춤)
-  const elementIdStr = row.elementId ?? row.elementid ?? undefined;
-  const sourceEntity = elementIdStr
+  // elementId 정규화
+  //   - 이미 KeySet JSON: 그대로 사용
+  //   - 공백구분 또는 단일 ID: KeySet JSON으로 변환
+  const elementIdRaw = row.elementId ?? row.elementid ?? undefined;
+  const elementIdKeyset = (() => {
+    if (!elementIdRaw) return undefined;
+    const s = String(elementIdRaw).trim();
+    if (!s) return undefined;
+
+    // KeySet JSON인지 체크
+    if (s.startsWith("{") && s.includes('"instanceKeys"')) {
+      // 유효성 가볍게 확인(파싱 실패시 안전 리턴)
+      try {
+        const kj = JSON.parse(s);
+        if (kj?.instanceKeys?.["bis.Element"]) return s;
+      } catch { /* fallthrough */ }
+    }
+
+    // 공백 구분/단일 ID -> 배열로
+    const ids = s.split(/\s+/).filter(Boolean);
+    if (ids.length === 0) return undefined;
+
+    return JSON.stringify({ instanceKeys: { "bis.Element": ids } });
+  })();
+
+  const sourceEntity = elementIdKeyset
     ? {
         iModelElement: {
-          // elementId에 KeySet JSON 문자열을 심어둔다 (bis.Element 가정)
-          elementId: JSON.stringify({ instanceKeys: { "bis.Element": [String(elementIdStr)] } }),
+          elementId: elementIdKeyset,
           modelId: "",
           changeSetId: "",
           modelName: "",
@@ -525,14 +557,16 @@ function rowToIssue(row: any): IssueGet {
   return {
     id: idStr,
     displayName,
-    subject: subject,
+    subject,
     description: row.body ?? "",
     type,
-    number: idStr, // 샘플 UI에서 좌측 타이틀 표시용
+    number: idStr, // 우선은 DB id를 number로 노출
     dueDate: row.dueDate ?? row.duedate ?? undefined,
-    status: row.status ?? undefined, // 원문 상태도 보존
+    status: row.status ?? undefined, // 원문 상태
     state,
-    assignee: row.assignee ? { id: String(row.assignee), displayName: String(row.assignee) } : undefined,
+    assignee: row.assignee
+      ? { id: String(row.assignee), displayName: String(row.assignee) }
+      : undefined,
     createdBy: row.createdBy ?? row.createdby ?? undefined,
     createdDateTime: row.createdAt ?? row.createdat ?? undefined,
     lastModifiedBy: undefined, // DB에 없으니 비움
@@ -630,10 +664,11 @@ export default class IssuesClient {
   }
 
   public static async saveProjectIssues(siteId: string, userId: string, issues: IssueChange[]): Promise<{ success: boolean; upserts?: number; deletes?: number; message?: string }> {
-    const { apiBase } = JSON.parse(localStorage.getItem("auth") || "null") || {};
-    if (!apiBase) throw new Error("apiBase not configured");
+    const base = apiBase();
+    if (!base) throw new Error("apiBase not configured");
 
-    const res = await fetch(`${apiBase.replace(/\/+$/,'')}/itwin/api/issues/save.php`, {
+    const url = `${base.replace(/\/+$/,'')}/issues/save.php`;
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ siteId, userId, issues }),

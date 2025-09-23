@@ -17,6 +17,7 @@ import type { WidgetStateChangedEventArgs } from "@itwin/appui-react";
 import { Angle, Point3d, Vector3d } from "@itwin/core-geometry";
 import { Alert, Anchor, IconButton, LabeledSelect, ProgressRadial, SelectOption, Tab, Table, Tabs, Text, Tile,Button, Modal, ModalButtonBar, InputGroup } from "@itwin/itwinui-react";
 import { IModelApp, PrimitiveTool, BeButtonEvent, EventHandled } from "@itwin/core-frontend";
+import type { IModelConnection } from "@itwin/core-frontend";
 import { MarkerPinDecorator } from "../issues/marker-pin/MarkerPinDecorator";
 import IssuesApi, { LabelWithId } from "./IssuesApi";
 import IssuesClient, { AttachmentMetadataGet, AuditTrailEntryGet, CommentGetPreferReturnMinimal, IssueDetailsGet, IssueGet, IssueChange } from "./IssuesClient";
@@ -84,18 +85,27 @@ const IssuesWidget = () => {
   const [newSubject, setNewSubject] = useState("");
   const [showEdit, setShowEdit] = useState(false);
   const [editSubject, setEditSubject] = useState("");
-  const [editStatus, setEditStatus] = useState<"Open"|"Closed"|"Draft"|"Deleted">("Open");
+  const [editState, setEditState] = useState<"Open"|"Closed"|"Draft">("Open"); // 워크플로
+  const [editStatus, setEditStatus] = useState<"Unresolved"|"Resolved"|"Verified">("Unresolved"); // 업무상태
   const [editDescription, setEditDescription] = useState("");
   const [editElementId, setEditElementId] = useState(""); // 원본 elementId 문자열
   const [editXYZ, setEditXYZ] = useState<{x?:number,y?:number,z?:number}>({});
+  const [editLinks, setEditLinks] = useState<string[]>([]); // 링크된 elementId 배열
+  const [editAssignee, setEditAssignee] = useState("");
+
   //마커
   const [markerVersion, setMarkerVersion] = useState(0);
-  const [editLinks, setEditLinks] = useState<string[]>([]); // 링크된 elementId 배열
+  
+  //Status 추가 + 임시데이터유지
+  const [issueStatus, setIssueStatus] = useState<string>("all");
+  //리스트 진입시
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [leaveAction, setLeaveAction] = useState<null | (()=>void)>(null);
 
 
   /** Initialize Decorator */
   useEffect(() => {
-    IssuesApi.enableDecorations(issueDecorator);
+    //IssuesApi.enableDecorations(issueDecorator);
     return () => {
       IssuesApi.disableDecorations(issueDecorator);
     };
@@ -122,9 +132,11 @@ const IssuesWidget = () => {
   }, [currentIssues]);
 
   const applyView = useCallback(async (issue: IssueGet) => {
-    /** apply the camera position if present */
-    if (viewport?.view.is3d()) {
-      const view3d = viewport.view;
+    if (!viewport) return;
+    const vp = viewport;
+
+    // 1) cameraView 있으면 그대로 적용
+    if (vp.view.is3d()) {
       const cameraView = issue.modelView?.cameraView;
       if (cameraView) {
         const eyePoint = Point3d.fromJSON(cameraView.viewPoint);
@@ -132,9 +144,27 @@ const IssuesWidget = () => {
         const directionVector = Point3d.fromJSON(cameraView.direction);
         const fov = Angle.degreesToRadians(cameraView.fieldOfView!);
         const targetPoint = eyePoint.plus(directionVector);
-        view3d.lookAt({ eyePoint, targetPoint, upVector, lensAngle: Angle.createRadians(fov) });
-        viewport.synchWithView();
+        vp.view.lookAt({ eyePoint, targetPoint, upVector, lensAngle: Angle.createRadians(fov) });
+        vp.synchWithView({ animateFrustumChange: true });
+        return;
       }
+    }
+
+    // 2) linked elements 있으면 그걸로 줌
+    const raw = issue.sourceEntity?.iModelElement?.elementId as string | undefined;
+    const ids = IssuesApi.parseElementIds(raw);
+    if (ids.length) {
+      await viewport.zoomToElements(ids, { animateFrustumChange: true });
+      return;
+    }
+
+    // 3) modelPin만 있으면 pin 주변으로 줌
+    const p = issue.modelPin?.location;
+    if (p) {
+      const pad = 2.0;
+      const min = Point3d.create(p.x - pad, p.y - pad, p.z - pad);
+      const max = Point3d.create(p.x + pad, p.y + pad, p.z + pad);
+      await viewport.zoomToVolume({ low: min, high: max }, { animateFrustumChange: true });
     }
   }, [viewport]);
 
@@ -231,15 +261,11 @@ const IssuesWidget = () => {
 
   /** Returns a color corresponding to the status of the issue */
   const issueStatusColor = (issue: IssueGet) => {
-    switch (issue.status) {
-      case "Unresolved": /* Orange */
-        return "#F18812";
-      case "Verified":  /* Blue */
-        return "#0088FF";
-      case "Resolved": /* Green */
-        return "#56A91C";
-      default: /* Rejected: Red */
-        return "#D30A0A";
+    switch (String(issue.status || "").toLowerCase()) {
+      case "unresolved": return "#F18812"; // 주황
+      case "verified":   return "#0088FF"; // 파랑
+      case "resolved":   return "#56A91C"; // 초록
+      default:           return "#D30A0A"; // 그 외/미정
     }
   };
 
@@ -258,20 +284,31 @@ const IssuesWidget = () => {
     return yiq >= 190 ? "#000000" : "#FFFFFF";
   };
 
+  // A. currentIssue가 바뀌면 링크 캐시 무효화
+  useEffect(() => {
+    setLinkedElements(undefined);
+  }, [currentIssue?.id]);
+
+  // B. getLinkedElements: 캐시 스킵 조건 삭제(혹은 '같은 이슈일 때만 스킵')
   const getLinkedElements = useCallback(async () => {
     /** Don't refetch if we have already received the linked elements */
-    if (!iModelConnection || currentLinkedElements || !currentIssue)
+    if (!iModelConnection || !currentIssue)
       return;
 
-    if (!currentIssue.sourceEntity?.iModelElement?.elementId) {
+    const raw = currentIssue.sourceEntity?.iModelElement?.elementId as string | undefined;
+    const ids = IssuesApi.parseElementIds(raw); // ← 공용 파서 사용
+    if (ids.length === 0) {
       setLinkedElements([]);
       return;
     }
 
-    const elementKeySet = await IssuesApi.getElementKeySet(currentIssue.sourceEntity?.iModelElement?.elementId);
-    const elementInfo = await IssuesApi.getElementInfo(iModelConnection, elementKeySet);
-    setLinkedElements(elementInfo);
-  }, [currentIssue, currentLinkedElements, iModelConnection]);
+    try {
+      const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
+      setLinkedElements(infos);
+    } catch {
+      setLinkedElements([]); // 에러나도 UI는 정상 렌더
+    }
+  }, [currentIssue, iModelConnection]);
 
   /** call the client to get the issue attachments */
   const getIssueAttachments = useCallback(async () => {
@@ -316,6 +353,32 @@ const IssuesWidget = () => {
     setIssueAuditTrails((prevState) => ({ ...prevState, [currentIssue.displayName as string]: auditTrail }));
   }, [currentIssue, issueAuditTrails]);
 
+
+  // 오버레이 헬퍼
+  function applyOverlayToIssue(base: IssueGet, pending: IssueChange[]): IssueGet {
+    // 같은 id의 pending 하나만 찾으면 됨
+    const ov = [...pending].reverse().find(p => p.id && String(p.id) === String(base.id));
+    if (!ov) return base;
+
+    return {
+      ...base,
+      subject:     ov.subject   ?? base.subject,
+      description: ov.body      ?? base.description,
+      status:      ov.status    ?? base.status, // 업무상태
+      state:       ov.state     ?? base.state,  // 워크플로
+      modelPin: (ov.x!=null && ov.y!=null && ov.z!=null)
+        ? { location: Point3d.create(ov.x!, ov.y!, ov.z!) }
+        : base.modelPin,
+      sourceEntity: ov.elementId
+        ? { iModelElement: { elementId: ov.elementId, modelId:"", changeSetId:"", modelName:"" } as any }
+        : base.sourceEntity,
+      // assignee: 문자열이 “정의되어 있을 때만” 대체
+      ...(ov.assignee !== undefined
+        ? { assignee: { id: String(ov.assignee), displayName: String(ov.assignee) } }
+        : {}),
+    };
+  }
+
   //목록 리로드 헬퍼
   const reloadIssues = React.useCallback(async () => {
     if (!auth?.apiBase) {
@@ -350,20 +413,52 @@ const IssuesWidget = () => {
 
       const merged = oldIssues.concat(news);
 
+      // ★ 보류 중 변경분을 화면 목록에 오버레이(낙관적 업데이트 유지)
+      const overlayById = new Map(pendingIssues.filter(p=>p.id).map(p=>[String(p.id), p]));
+      const mergedWithPending = merged.map(it => {
+        const ov = overlayById.get(String(it.id));
+        if (!ov) return it;
+        return {
+          ...it,
+          subject: ov.subject ?? it.subject,
+          description: ov.body ?? it.description,
+          status: ov.status ?? it.status,
+          state: ov.state ?? it.state,
+          modelPin: (ov.x!=null&&ov.y!=null&&ov.z!=null) ? { location: Point3d.create(ov.x, ov.y, ov.z) } : it.modelPin,
+          sourceEntity: ov.elementId ? { iModelElement: { elementId: ov.elementId, modelId:"", changeSetId:"", modelName:"" } as any } : it.sourceEntity,
+        } as IssueGet;
+      });
+
       // 현재 필터에 맞는 임시이슈만 남기기
       const filterState = issueState !== 'all' ? issueState : undefined;
       const filterType  = issueFilter !== 'all' ? issueFilter : undefined;
+      const filterStatus = issueStatus !== 'all' ? issueStatus : undefined;
       const matchFilter = (iss: IssueGet) => {
-        const st = (iss.state || iss.status || '').toLowerCase();
-        const ty = (iss.type  || '').toString();
-        const notDeleted = (iss.status || '').toLowerCase() !== 'deleted';
-        const okState = !filterState || filterState.toLowerCase() === (st || 'open').toLowerCase();
-        const okType  = !filterType  || ty === filterType;
-        return okState && okType && (!filterState || filterState === 'Deleted' ? true : notDeleted);
+        const stState = (iss.state || '').toLowerCase();
+        const stStatus = (iss.status || '').toLowerCase();
+        const ty = (iss.type || '').toString();
+
+        const okState  = !filterState  || filterState.toLowerCase() === (stState || '').toLowerCase();
+        const okType   = !filterType   || ty === filterType;
+        const okStatus = !filterStatus || filterStatus.toLowerCase() === stStatus;
+
+        // Deleted 처리: statusFilter가 없으면 삭제 숨김(기존 UX 유지)
+        const notDeleted = stStatus !== 'deleted';
+        const deletedVisible = filterStatus?.toLowerCase() === 'deleted';
+
+        return okState && okType && okStatus && (deletedVisible ? true : notDeleted);
       };
-      const withDrafts = [...draftIssuesRef.current.filter(matchFilter), ...merged];
+
+      const withDrafts = [...draftIssuesRef.current.filter(matchFilter), ...mergedWithPending];
 
       setCurrentIssues(withDrafts);
+      // ★ 현재 선택 이슈도 최신(withDrafts) + pending 오버레이로 동기화
+      setCurrentIssue((prev) => {
+        if (!prev?.id) return prev;
+        // 새 목록에서 같은 이슈를 찾고, 없으면 이전 걸 유지(사용자가 상세를 보고 있을 수 있으니)
+        const found = withDrafts.find(it => String(it.id) === String(prev.id)) ?? prev;
+        return applyOverlayToIssue(found, pendingIssues);
+      });
       if (allIssues.current.length === 0) allIssues.current = withDrafts;
     } catch (e: any) {
       console.error(e);
@@ -372,24 +467,10 @@ const IssuesWidget = () => {
     } finally {
       setLoading(false);
     }
-  }, [siteId, issueFilter, issueState]);
-
-  // KeySet JSON 또는 공백구분 문자열 → elementId 배열
-  function parseElementIds(raw?: string): string[] {
-    if (!raw) return [];
-    try {
-      const kj = JSON.parse(raw);
-      const arr = kj?.instanceKeys?.["bis.Element"];
-      if (Array.isArray(arr)) return arr.map(String);
-    } catch {
-      // 공백 구분 "0x123 0x456" 형태 지원
-      return raw.split(/\s+/).filter(Boolean);
-    }
-    return [];
-  }
+  }, [siteId, issueFilter, issueState, issueStatus]);
 
   // 선택집합 → elementId 배열
-  function getSelectedElementIds(iModel?: ReturnType<typeof useActiveIModelConnection>): string[] {
+  function getSelectedElementIds(iModel?: IModelConnection): string[] {
     if (!iModel) return [];
     const set = iModel.selectionSet;
     if (!set) return [];
@@ -403,8 +484,7 @@ const IssuesWidget = () => {
 
   // 1회성 포인트 선택 툴
   class OneShotPointTool extends PrimitiveTool {
-    public static toolId = "OneShotPointTool";
-    /** 외부에서 주입하는 resolver */
+    public static toolId = "Issues.OneShotPoint"; // ← 반드시 "네임스페이스.이름"
     public static resolver?: (pt: Point3d | undefined) => void;
 
     constructor() { super(); }
@@ -432,21 +512,49 @@ const IssuesWidget = () => {
     }
   }
 
-  /** 외부 헬퍼: 한 점을 픽 (문자열 run) */
+  /** 외부 헬퍼: 한 점을 픽 */
   async function pickPoint(): Promise<Point3d | undefined> {
     return new Promise<Point3d | undefined>(async (resolve) => {
-      // resolver 주입
       OneShotPointTool.resolver = resolve;
 
-      // 아직 등록 안되어 있으면 등록
       if (!IModelApp.tools.find(OneShotPointTool.toolId)) {
-        IModelApp.tools.register(OneShotPointTool);
+        // ← 네임스페이스를 두 번째 인자로 넘겨서 등록
+        IModelApp.tools.register(OneShotPointTool, "Issues");
       }
 
-      // ✅ 이 버전은 문자열만 받음
       await IModelApp.tools.run(OneShotPointTool.toolId);
     });
   }
+
+  //Center / Point 버튼: 모달 잠시 숨기고 유저 액션 받기
+  async function withModalHidden<T>(fn: () => Promise<T>): Promise<T> {
+    setShowEdit(false);
+    try { return await fn(); }
+    finally { setShowEdit(true); }
+  }
+
+  const onCenterInteractive = async () => {
+    if (!iModelConnection) return alert("iModel 연결이 없습니다.");
+    const ids = await withModalHidden(() => IssuesApi.pickSelectionOnce(iModelConnection));
+    if (!ids.length) return;
+    try {
+      const infos = await IssuesApi.getElementInfoByIds(iModelConnection, ids);
+      const center = IssuesApi.centerOf(infos);
+      if (center) setEditXYZ({ x: center.x, y: center.y, z: center.z });
+      // 링크도 반영(중복제거)
+      setEditLinks(prev => Array.from(new Set([...prev, ...ids])));
+    } catch {
+      alert("BBox/Origin 중심을 계산할 수 없습니다.");
+    }
+  };
+
+  const onPointInteractive = async () => {
+    if (!viewport) return;
+    const pt = await withModalHidden(() => IssuesApi.promptForPointOnce(viewport));
+    if (!pt) return;
+    setEditXYZ({ x: pt.x, y: pt.y, z: pt.z });
+  };
+
 
   useEffect(() => {
     void reloadIssues();
@@ -554,7 +662,10 @@ const IssuesWidget = () => {
           return (
             <div key={label.id} role="presentation" className={"issue-linked-element"} onClick={() => viewport?.zoomToElements(label.id)}>
               <div className={"icon icon-item"}></div>
-              <div className={"issues-linked-element-label"}>{label.displayValue}</div>
+              <div className={"issues-linked-element-label"}>
+                <code style={{opacity:.8, marginRight:6}}>{label.id}</code>
+                <span>{label.displayValue || (label as any).rawValue || "(no label)"}</span>
+              </div>
             </div>);
         })}
       </div>
@@ -709,6 +820,14 @@ const IssuesWidget = () => {
     { value: "Deleted", label: "Deleted"},
   ];
 
+  const issueStatuses: SelectOption<string>[] = [
+    { value: "all", label: "All" },
+    { value: "Unresolved", label: "Unresolved" },
+    { value: "Resolved", label: "Resolved" },
+    { value: "Verified", label: "Verified" },
+    { value: "Deleted", label: "Deleted" },
+  ];
+
   const getTabContent = () => {
     switch (activeTab) {
       case 0:
@@ -756,8 +875,8 @@ const IssuesWidget = () => {
     const draft: IssueGet = {
       id: tempId,
       subject,
-      status: "Open",
-      state: "Open",
+      status: "Unresolved", // ← 업무상태 기본값
+      state: "Open",        // ← 워크플로 기본값
       type: "Issue",
       displayName: `${tempId} | ${subject}`,
       modelPin: pin ? { location: pin } : undefined,
@@ -772,7 +891,8 @@ const IssuesWidget = () => {
       ...prev,
       {
         subject,
-        status: "Open",
+        status: "Unresolved", // ← 서버에도 동일
+        state: "Open",
         type: "Issue",
         elementId: links.length ? buildKeySetJSON(links) : null,
         x: pin?.x ?? null, y: pin?.y ?? null, z: pin?.z ?? null,
@@ -780,68 +900,70 @@ const IssuesWidget = () => {
     ]);
     setShowAdd(false);
     setNewSubject("");
+    setMarkerVersion(v => v + 1);
   };
 
   // ② Modify: 현재 선택 이슈의 일부 필드 수정(mark as pending)
   const onModify = () => {
     const target = currentIssue;
     if (!target?.id) { alert("수정할 이슈를 먼저 선택하세요."); return; }
+
     setEditSubject(target.subject ?? "");
-    setEditStatus(((target.status as any) ?? "Open") as any);
     setEditDescription(target.description ?? "");
 
-    // 원본 elementId 복원 시도 (properties에 없으면 비워둠)
-  const rawKeySet = target.sourceEntity?.iModelElement?.elementId as string | undefined;
-  setEditLinks(parseElementIds(rawKeySet));
+    // State 초기값 (없으면 Open)
+    setEditState(((target.state as any) ?? "Open") as any);
 
-  // 좌표
-  const loc = target.modelPin?.location;
-  setEditXYZ({ x: loc?.x, y: loc?.y, z: loc?.z });
+    // Status 초기값 (없으면 Unresolved로)
+    const initStatus = ((): "Unresolved"|"Resolved"|"Verified" => {
+      const s = String(target.status || "").toLowerCase();
+      if (s === "resolved") return "Resolved";
+      if (s === "verified") return "Verified";
+      return "Unresolved";
+    })();
+    setEditStatus(initStatus);
 
-  setShowEdit(true);
+    setEditAssignee(target.assignee?.displayName ?? target.assignee?.id ?? "");
+
+    const rawKeySet = target.sourceEntity?.iModelElement?.elementId as string | undefined;
+    setEditLinks(IssuesApi.parseElementIds(rawKeySet));
+
+    const loc = target.modelPin?.location;
+    setEditXYZ({ x: loc?.x, y: loc?.y, z: loc?.z });
+
+    setShowEdit(true);
   };
 
   const confirmModify = () => {
     const t = currentIssue;
     if (!t?.id) return;
 
-    // 화면 즉시 반영
-    const next: IssueGet = {
-      ...t,
+    const newPending: IssueChange = {
+      id: t.id!,
       subject: editSubject,
-      description: editDescription,
+      body: editDescription,
       status: editStatus,
-      state: editStatus,
-      modelPin: {
-        location: (editXYZ.x!=null && editXYZ.y!=null && editXYZ.z!=null)
-          ? Point3d.create(editXYZ.x, editXYZ.y, editXYZ.z)
-          : t.modelPin?.location,
-      },
-      sourceEntity: editLinks.length ? {
-        iModelElement: {
-          // KeySet JSON을 elementId에 담아 둠 (getElementKeySet/zoom 에서 사용)
-          elementId: buildKeySetJSON(editLinks),
-          modelId: "", changeSetId: "", modelName: "",
-        } as any,
-      } : undefined,
+      state: editState,
+      elementId: editLinks.length ? buildKeySetJSON(editLinks) : null,
+      x: editXYZ.x ?? null, y: editXYZ.y ?? null, z: editXYZ.z ?? null,
+      ...(editAssignee.trim() ? { assignee: editAssignee.trim() } : {}), // ← 핵심: 빈값이면 필드 자체를 생략
     };
-    setCurrentIssue(next);
-    setCurrentIssues(prev => prev.map(it => it.id===t.id ? next : it));
 
-    // 서버로 보낼 변경분 큐 (DB 컬럼명 기준)
-    setPendingIssues(prev => ([
-      ...prev,
-      {
-        id: t.id!,
-        subject: editSubject,
-        body: editDescription,
-        status: editStatus,
-        elementId: editLinks.length ? buildKeySetJSON(editLinks) : null,
-        x: editXYZ.x ?? null, y: editXYZ.y ?? null, z: editXYZ.z ?? null,
-      }
-    ]));
+    setPendingIssues(prev => {
+      // ★ 같은 이슈(id)의 기존 pending은 제거하고 새걸로 교체
+      const deduped = prev.filter(p => !(p.id && String(p.id) === String(t.id)));
+      const merged  = [...deduped, newPending];
+
+      // ★ 화면 즉시 반영: 헬퍼로 동일 규칙 적용
+      const overlaid = applyOverlayToIssue(t, merged);
+      setCurrentIssue(overlaid);
+      setCurrentIssues(list => list.map(it => it.id === t.id ? overlaid : it));
+
+      return merged;
+    });
 
     setShowEdit(false);
+    setMarkerVersion(v => v + 1);
   };
 
   // ③ Delete: 현재 선택 이슈 삭제 마킹 (소프트 삭제 기준)
@@ -949,6 +1071,9 @@ const IssuesWidget = () => {
                 <LabeledSelect label="State:" size="small" displayStyle="inline" options={issueStates} value={issueState} onChange={(value: string) => setIssueState(value)}></LabeledSelect>
               </div>
               <div className="filter">
+                <LabeledSelect label="Status:" size="small" displayStyle="inline" options={issueStatuses} value={issueStatus} onChange={(value: string)=>setIssueStatus(value)}></LabeledSelect>
+              </div>
+              <div className="filter">
                 <LabeledSelect label="Type:" size="small" displayStyle="inline" options={issueTypes} value={issueFilter} onChange={(value: string) => setIssueType(value)}></LabeledSelect>
               </div>
             </div>
@@ -997,7 +1122,7 @@ const IssuesWidget = () => {
                   </div>
                   <div className="issue-info" role="presentation" onClick={() => { setCurrentIssue(issue); setActiveTab(0); }}>
                     <Text variant="leading" className={"issue-title"}>
-                      {`${issue.number ?? issue.id ?? ""} | ${issue.subject ?? ""}`}
+                      {`${issue.number ?? `i-${String(issue.id).padStart(5,'0')}`} | ${issue.subject ?? ""}`}
                     </Text>
                     <div className="issue-subtitle">
                       <span className={"assignee-display-name"}>{issue.assignee?.displayName}</span>
@@ -1016,7 +1141,26 @@ const IssuesWidget = () => {
         {currentIssue &&
           <div className={"issue-details"}>
             <Text variant="leading" className={"header"}>
-              <IconButton label="Back" styleType="borderless" size="small" className="back-button" onClick={() => { setCurrentIssue(undefined); setLinkedElements(undefined); }}><span className="icon icon-chevron-left"></span></IconButton>
+              <IconButton 
+                label="Back" 
+                styleType="borderless" 
+                size="small" 
+                className="back-button" 
+                onClick={() => {   
+                  const hasPending = pendingIssues.length > 0 || draftIssuesRef.current.length > 0;
+                  if (!hasPending) {
+                    setCurrentIssue(undefined);
+                    setLinkedElements(undefined);
+                    return;
+                  }
+                  // 확인 모달 열고, 실제 액션은 콜백에 담아둠
+                  setLeaveAction(() => () => {
+                    setCurrentIssue(undefined);
+                    setLinkedElements(undefined);
+                  });
+                  setShowLeaveConfirm(true);
+                }} ><span className="icon icon-chevron-left"></span>
+              </IconButton>
               {`${currentIssue.number} | ${currentIssue.subject}`}
             </Text>
 
@@ -1067,11 +1211,22 @@ const IssuesWidget = () => {
 
           <InputGroup label="Status">
             <select value={editStatus} onChange={(e)=>setEditStatus(e.target.value as any)}>
+              <option>Unresolved</option>
+              <option>Resolved</option>
+              <option>Verified</option>
+            </select>
+          </InputGroup>
+
+          <InputGroup label="Workflow State">
+            <select value={editState} onChange={(e)=>setEditState(e.target.value as any)}>
               <option>Open</option>
               <option>Closed</option>
               <option>Draft</option>
-              <option>Deleted</option>
             </select>
+          </InputGroup>
+
+          <InputGroup label="Assignee">
+            <input value={editAssignee} onChange={(e)=>setEditAssignee(e.target.value)} />
           </InputGroup>
 
           <InputGroup label="Description">
@@ -1082,8 +1237,8 @@ const IssuesWidget = () => {
             <div style={{ display: "grid", gap: 6 }}>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <Button size="small" onClick={onLinkFromSelection}>Link from Selection</Button>
-                <Button size="small" onClick={onCenterFromLinks}>Center</Button>
-                <Button size="small" onClick={onPickPoint}>Point</Button>
+                <Button size="small" onClick={onCenterInteractive}>Center</Button>
+                <Button size="small" onClick={onPointInteractive}>Point</Button>
                 <Button size="small" onClick={onUnlinkAll}>Clear</Button>
               </div>
 
@@ -1114,6 +1269,32 @@ const IssuesWidget = () => {
           <Button styleType="high-visibility" onClick={confirmModify}>Apply</Button>
         </ModalButtonBar>
       </Modal>
+
+      <Modal
+        isOpen={showLeaveConfirm}
+        title="수정사항을 저장하시겠습니까?"
+        onClose={() => setShowLeaveConfirm(false)}
+        closeOnEsc closeOnExternalClick
+      >
+        <div style={{padding:4}}>저장하지 않은 변경 사항이 있습니다.</div>
+        <ModalButtonBar>
+          <Button onClick={() => { // Cancel
+            setShowLeaveConfirm(false);
+          }}>Cancel</Button>
+          <Button onClick={() => { // No: 버리고 나가기
+            draftIssuesRef.current = [];
+            setPendingIssues([]);
+            setShowLeaveConfirm(false);
+            leaveAction?.();
+          }}>No</Button>
+          <Button styleType="high-visibility" onClick={async () => { // Yes: 저장 후 나가기
+            setShowLeaveConfirm(false);
+            await onSave();
+            leaveAction?.();
+          }}>Yes</Button>
+        </ModalButtonBar>
+      </Modal>
+
     </>
   );
 };
