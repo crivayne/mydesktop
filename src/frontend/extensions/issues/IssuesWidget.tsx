@@ -560,15 +560,15 @@ const IssuesWidget = () => {
     if (!siteId) return alert("siteId가 없습니다.");
     if (!currentIssue?.id) return alert("이슈 ID가 없습니다.");
     if (String(currentIssue.id).startsWith("tmp-")) {
-      alert("먼저 Save로 이슈를 생성한 뒤(정식 ID 발급), 썸네일을 캡처하세요.");
+      alert("먼저 Save로 이슈를 생성(정식 ID 발급)한 뒤 캡처하세요.");
       return;
     }
     const vp = IModelApp.viewManager.selectedView;
     if (!vp) return alert("활성 뷰가 없습니다.");
 
-    // 0) 오버레이(마커) 잠깐 끄기 → 아이콘만 찍히는 문제 방지
-    const wasSuspended = IModelApp.viewManager.areDecorationsSuspended;
-    IModelApp.viewManager.setDecoratorSuspended(true);
+    // 0) 데코레이터 잠시 끄기(아이콘만 찍히는 문제 방지)
+    IssuesApi.disableDecorations(issueDecorator);
+
     try {
       // 1) 화면 한 프레임 다시 렌더
       vp.invalidateRenderPlan();
@@ -628,8 +628,9 @@ const IssuesWidget = () => {
       console.error(e);
       alert(`썸네일 저장 실패: ${e?.message || e}`);
     } finally {
-      // 7) 오버레이 원복 + 한 프레임 렌더
-      IModelApp.viewManager.setDecoratorSuspended(wasSuspended);
+      // 6) 데코레이터 다시 켜고 마커 리드로우
+      IssuesApi.enableDecorations(issueDecorator);
+      setMarkerVersion(v => v + 1);
       vp.invalidateRenderPlan();
       vp.renderFrame();
     }
@@ -674,10 +675,9 @@ const IssuesWidget = () => {
   }, [activeTab, getIssueAttachments, getIssueAuditTrail, getIssueComments, getLinkedElements]);
 
   useEffect(() => {
-    const remove = UiFramework.frontstages.onWidgetStateChangedEvent.addListener(
-      (args: WidgetStateChangedArgs) => {
-        const wid = args.widgetDef?.id ?? args.widgetId;
-        if (wid !== "IssuesWidget") return;
+    const remove = UiFramework.frontstages.onWidgetStateChangedEvent.addListener((args: any) => {
+      const wid = args.widgetDef?.id ?? args.widgetId;
+      if (wid !== "IssuesWidget") return;
 
         const isOpen =
           args.widgetState === WidgetState.Open ||
@@ -687,12 +687,10 @@ const IssuesWidget = () => {
           // 패널이 닫히면 마커/데코레이터 숨김
           IssuesApi.clearDecoratorPoints(issueDecorator);
           IssuesApi.disableDecorations(issueDecorator);
-          IModelApp.viewManager.setDecoratorSuspended(true);
         } else {
           // 다시 열리면 데코레이터 활성화 (마커는 currentIssues effect가 다시 그림)
-          IModelApp.viewManager.setDecoratorSuspended(false);
           IssuesApi.enableDecorations(issueDecorator);
-          setMarkerVersion(v => v + 1); //마커 다시그리기
+          setMarkerVersion(v => v + 1);             // 마커 재생성 트리거
           const vp = IModelApp.viewManager.selectedView;
           vp?.invalidateRenderPlan();
           vp?.renderFrame();
@@ -956,8 +954,8 @@ const IssuesWidget = () => {
 
           // ★ 선택이 없거나 center를 못 구했으면, 뷰 프러스텀 중심 사용
           if (!pin && viewport) {
-            const fr = viewport.view.computeViewRange();
-            const center = fr.low.interpolate(0.5, fr.high);
+            const fr = viewport.view.computeFitRange();         // ← computeViewRange 대신
+            const center = fr.low.interpolate(0.5, fr.high);    // Range3d의 low/high 사용
             pin = center;
           }
         } catch {}
