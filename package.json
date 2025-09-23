@@ -32,7 +32,7 @@
     "@itwin/imodels-access-frontend": "^6.0.1",
     "@itwin/imodels-client-authoring": "^6.0.1",
     "@itwin/imodels-client-management": "^6.0.1",
-    "@itwin/itwinui-css": "^3.0.0",
+    "@itwin/itwinui-css": "^2.5.0",
     "@itwin/itwinui-icons-react": "^2.1.0",
     "@itwin/itwinui-illustrations-react": "^2.0.1",
     "@itwin/itwinui-layouts-css": "^0.2.0",

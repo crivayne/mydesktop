@@ -485,6 +485,11 @@ async function postJson<T>(url: string, body: any): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+function formatIssueNumber(id: string|number, prefix = "i", width = 5) {
+  const n = String(id);
+  return `${prefix}-${n.padStart(width, "0")}`;
+}
+
 // DB → UI(IssueGet)로 변환
 function rowToIssue(row: any): IssueGet {
   // state/status 매핑
@@ -556,11 +561,11 @@ function rowToIssue(row: any): IssueGet {
 
   return {
     id: idStr,
-    displayName,
+    displayName: `${formatIssueNumber(idStr)} | ${subject}`,
     subject,
     description: row.body ?? "",
     type,
-    number: idStr, // 우선은 DB id를 number로 노출
+    number: formatIssueNumber(idStr),
     dueDate: row.dueDate ?? row.duedate ?? undefined,
     status: row.status ?? undefined, // 원문 상태
     state,
@@ -586,7 +591,7 @@ function rowToIssue(row: any): IssueGet {
 function rowToIssueSummary(row: any): IssueSummary {
   const idStr = row.id != null ? String(row.id) : "";
   const subject = row.subject ?? "";
-  const displayName = subject ? `${idStr} | ${subject}` : idStr;
+  const displayName = subject ? `${formatIssueNumber(idStr)} | ${subject}` : formatIssueNumber(idStr);
 
   // type 보정 (단어별 Capitalize)
   const type = (() => {
