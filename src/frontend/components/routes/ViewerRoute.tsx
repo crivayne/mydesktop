@@ -6,39 +6,23 @@
 import React from "react";
 import {
   Viewer,
-  ViewerContentToolsProvider,
-  ViewerNavigationToolsProvider,
-  ViewerStatusbarItemsProvider,
 } from "@itwin/desktop-viewer-react";
-import { MeasureToolsUiItemsProvider } from "@itwin/measure-tools-react";
-import {
-  AncestorsNavigationControls,
-  CopyPropertyTextContextMenuItem,
-  createPropertyGrid,
-  ShowHideNullValuesSettingsMenuItem,
-} from "@itwin/property-grid-react";
-import {
-  CategoriesTreeComponent,
-  createTreeWidget,
-  ModelsTreeComponent,
-} from "@itwin/tree-widget-react";
 import { useEffect, useState } from "react";
 import { useLocation,useNavigate } from "react-router-dom";
 import { viewerRpcs, channelName } from "../../../common/ViewerConfig";
 import {
   unifiedSelectionStorage,
 } from "../../../selectionStorage";
-import { IpcApp, IModelApp, Viewport } from "@itwin/core-frontend";
+import { IpcApp, IModelApp, Viewport, } from "@itwin/core-frontend";
 import { Api, SnapshotRow } from "../../services/api";
 import RenderSettings from "../../extensions/settings/RenderSettings";
-import { ViewToolProvider } from "../../extensions/ViewToolProvider";
-import { SettingsWidgetProvider } from "../../extensions/settings/SettingsWidget";
-import { IssuesWidgetProvider } from "../../extensions/issues/IssuesWidget"
 import { registerNavigator } from "../../services/navigation";
 import TopBar from "../TopBar";
 import type { RealityLibRow } from "../../services/api";
 import RealityLibraryDialog from "../common/RealityLibraryDialog";
 import { attachByKind } from "../../services/reality";
+import { getBaseUiProviders, getIssuesProvider } from "./uiProvidersSingleton";
+import { onUi } from "../../services/uiBus";
 
 
 function PickDialog<T>(props: {
@@ -98,7 +82,11 @@ export const ViewerRoute = () => {
   const [pendingServerUrl, setPendingServerUrl] = useState<string | null>(null);
   const [showRenderSettings, setShowRenderSettings] = useState(false);
   const [libOpen, setLibOpen] = useState(false);
-  
+  const baseProviders = React.useMemo(() => getBaseUiProviders(), []);
+
+  const uiProviders = baseProviders;
+
+
   const navigate = useNavigate();
 
   // ★ 라우터가 살아 있는 동안 헬퍼에 등록
@@ -220,10 +208,11 @@ export const ViewerRoute = () => {
 
     const onOpen = (vp: Viewport) => {
       // 약간 뒤에 실행해서 뷰가 완전히 뜬 뒤 Fit
-      setTimeout(() => {
+      setTimeout(() => { 
         try {
           // 특정 뷰포트에 대해 Fit 실행
           void IModelApp.tools.run("View.Fit", vp);
+          requestAnimationFrame(() => vp.renderFrame()); // 한 프레임 보장
         } catch (e) {
           console.warn("Fit failed:", e);
           // 실패시 첫 뷰포트 대상으로 한 번 더 시도
@@ -237,7 +226,8 @@ export const ViewerRoute = () => {
       IModelApp.viewManager.onViewOpen.removeListener(onOpen);
     };
   }, [filePath]);
-  
+
+
   useEffect(() => {
     const onMenu = (_evt: any, cmd: string) => {
       if (cmd === "render-settings") setShowRenderSettings(true);
@@ -247,6 +237,25 @@ export const ViewerRoute = () => {
     return () => { /* @ts-ignore */ IpcApp.removeListener?.(channelName, onMenu); };
   }, []);
 
+  // 툴바/다른 UI가 보내는 이벤트 버스 명령 수신
+  useEffect(() => {
+    const unsubscribe = onUi(async (cmd) => {
+      if (cmd.type === "open-snapshot") {
+        try {
+          const snaps = await Api.listSnapshotsAll();
+          setSnapshots(snaps);
+          setPickOpen(true);
+        } catch {
+          alert("스냅샷 목록을 불러오지 못했습니다.");
+        }
+      }
+      if (cmd.type === "open-reality") {
+        setLibOpen(true);
+      }
+    });
+    return () => { unsubscribe(); };   // ✅ cleanup은 () => void
+  }, []);
+  
   return (
       <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       {/* 상단 고정 바 */}
@@ -256,64 +265,15 @@ export const ViewerRoute = () => {
         // ✅ 기존에 쓰던 Viewer JSX를 그대로 두세요 (수정 X)
         <div style={{ position: "relative", height: "100%" }}>
           <Viewer
+            key={filePath || 'no-file'} 
             rpcInterfaces={viewerRpcs}
             filePath={filePath}
-            uiProviders={[
-              new ViewerNavigationToolsProvider(),
-              new ViewerContentToolsProvider({ vertical: { measureGroup: false } }),
-              new ViewerStatusbarItemsProvider(),
-              {
-                id: "TreeWidgetUIProvider",
-                getWidgets: () => [createTreeWidget({
-                  trees: [
-                    {
-                      id: ModelsTreeComponent.id,
-                      getLabel: () => ModelsTreeComponent.getLabel(),
-                      render: (props) => (
-                        <ModelsTreeComponent
-                          getSchemaContext={(iModel) => iModel.schemaContext}
-                          density={props.density}
-                          selectionStorage={unifiedSelectionStorage}
-                          selectionMode={"extended"}
-                          onPerformanceMeasured={props.onPerformanceMeasured}
-                          onFeatureUsed={props.onFeatureUsed}
-                        />
-                      ),
-                    },
-                    {
-                      id: CategoriesTreeComponent.id,
-                      getLabel: () => CategoriesTreeComponent.getLabel(),
-                      render: (props) => (
-                        <CategoriesTreeComponent
-                          getSchemaContext={(iModel) => iModel.schemaContext}
-                          density={props.density}
-                          selectionStorage={unifiedSelectionStorage}
-                          onPerformanceMeasured={props.onPerformanceMeasured}
-                          onFeatureUsed={props.onFeatureUsed}
-                        />
-                      ),
-                    },
-                  ],
-                })],
-              },
-              {
-                id: "PropertyGridUIProvider",
-                getWidgets: () => [createPropertyGrid({
-                  autoExpandChildCategories: true,
-                  ancestorsNavigationControls: (props) => (<AncestorsNavigationControls {...props} />),
-                  contextMenuItems: [(props) => (<CopyPropertyTextContextMenuItem {...props} />)],
-                  settingsMenuItems: [(props) => (<ShowHideNullValuesSettingsMenuItem {...props} persist={true} />)],
-                })],
-              },
-              new MeasureToolsUiItemsProvider(),
-              new ViewToolProvider(),
-              new SettingsWidgetProvider(),
-              new IssuesWidgetProvider(),
-            ]}
+            uiProviders={uiProviders} // 기본 UI구성 
             enablePerformanceMonitors={true}
             selectionStorage={unifiedSelectionStorage}
           />
         </div>  
+
       ) : (
         // ✅ 파일이 아직 없을 때: 간단 버튼바 제공
         <div style={{
@@ -404,7 +364,7 @@ export const ViewerRoute = () => {
       
       <RealityLibraryDialog
         open={libOpen}
-        onClose={()=>setLibOpen(false)}
+        onClose={() => setLibOpen(false)}
         onPick={async (row: RealityLibRow) => {
           try {
             const sId = localStorage.getItem("siteId") || "";
@@ -415,15 +375,20 @@ export const ViewerRoute = () => {
             const vp = IModelApp.viewManager.selectedView;
             if (vp) {
               attachByKind(vp as any, row.kind, row.url, row.name);
+              // 렌더/카메라 갱신
+              try { vp.invalidateRenderPlan(); } catch {}
+              setTimeout(() => { try { void IModelApp.tools.run("View.Fit", vp); } catch {} }, 80);
+              alert("등록/로드 완료");
+            } else {
+              alert("먼저 스냅샷을 열어주세요. (File→Open 또는 Snapshot Open)");
             }
 
-            alert("등록/로드 완료");
             setLibOpen(false);
           } catch (e:any) {
             alert("오류: " + (e.message || e));
           }
         }}
-      />  
+      />
     </div>
   );
 };

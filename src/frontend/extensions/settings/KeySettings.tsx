@@ -39,6 +39,15 @@ function zoomToSelected() {
   vp.zoomToElements(vp.iModel.selectionSet.elements, { animateFrustumChange: true });
 }
 
+// Select Elements 모드 실행
+function activateSelectMode() {
+  // 1) Select 툴 실행 시도
+  if (!IModelApp.tools.run || !IModelApp.tools.run("Select")) {
+    // 2) 실패하면 default selection 툴로 폴백
+    IModelApp.toolAdmin.startDefaultTool();
+  }
+}
+
 // RenderMode 순환
 const RENDER_ORDER: RenderMode[] = [
   RenderMode.SmoothShade,
@@ -109,6 +118,7 @@ const ACTIONS: ActionItem[] = [
   // View
   { id: "fit",     label: "Fit View",            run: fitView,             category: "View" },
   { id: "zoomSel", label: "Zoom to Selection",   run: zoomToSelected,      category: "View" },
+  { id: "selectMode", label: "Select Elements Mode", run: activateSelectMode, category: "View" },
 
   // Render
   { id: "renderCycle", label: "Cycle Render Mode", run: cycleRenderMode,   category: "Render" },
@@ -181,6 +191,7 @@ function loadKeys(accountKey: string): KeyMap {
     // View
     fit: "f",
     zoomSel: "shift+f",
+    selectMode: "v", 
     // Render
     renderCycle: "ctrl+shift+r",
     shadows: "ctrl+shift+s",

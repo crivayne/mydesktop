@@ -16,13 +16,28 @@ import {
 import type { WidgetStateChangedEventArgs } from "@itwin/appui-react";
 import { Angle, Point3d, Vector3d } from "@itwin/core-geometry";
 import { Alert, Anchor, IconButton, LabeledSelect, ProgressRadial, SelectOption, Tab, Table, Tabs, Text, Tile,Button, Modal, ModalButtonBar, InputGroup } from "@itwin/itwinui-react";
-import { IModelApp, PrimitiveTool, BeButtonEvent, EventHandled } from "@itwin/core-frontend";
+import { IModelApp, PrimitiveTool, BeButtonEvent, EventHandled, Viewport } from "@itwin/core-frontend";
 import type { IModelConnection } from "@itwin/core-frontend";
 import { MarkerPinDecorator } from "../issues/marker-pin/MarkerPinDecorator";
 import IssuesApi, { LabelWithId } from "./IssuesApi";
 import IssuesClient, { AttachmentMetadataGet, AuditTrailEntryGet, CommentGetPreferReturnMinimal, IssueDetailsGet, IssueGet, IssueChange } from "./IssuesClient";
 import { useAuth } from "../../services/AuthContext";
 import "./Issues.scss";
+
+// 구/신버전 호환 리드로우
+function safeRequestRedraw(vp?: Viewport | any) {
+  if (!vp || vp.isDisposed) return;
+  // 신버전: Viewport.requestRedraw()
+  if ((vp as any).requestRedraw) {
+    (vp as any).requestRedraw();
+    return;
+  }
+  // 구버전 폴백: 직접 렌더는 피하고 무효화만
+  try { vp.invalidateDecorations?.(); } catch {}
+  try { vp.invalidateScene?.(); } catch {}
+  try { vp.invalidateRenderPlan?.(); } catch {}
+  // renderFrame() 직접 호출은 크래시 원인이라 의도적으로 호출하지 않음
+}
 
 const IssuesWidget = () => {
   type WidgetStateChangedArgs = {
@@ -106,18 +121,45 @@ const IssuesWidget = () => {
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [leaveAction, setLeaveAction] = useState<null | (()=>void)>(null);
 
+  // open 상태 감지
+  const useIsIssuesOpen = () => {
+    const [isOpen, setIsOpen] = React.useState<boolean>(() => {
+      const wid = UiFramework.frontstages.activeFrontstageDef?.findWidgetDef("IssuesWidget");
+      const st = wid?.state;
+      return st === WidgetState.Open || (WidgetState as any).Visible === st;
+    });
+
+    React.useEffect(() => {
+      const ev: any = UiFramework.frontstages?.onWidgetStateChangedEvent;
+      if (!ev?.addListener) return;
+      const off = ev.addListener((args: any) => {
+        const wid = args?.widgetDef?.id ?? args?.widgetId;
+        if (wid !== "IssuesWidget") return;
+        const open = args.widgetState === WidgetState.Open ||
+                    (WidgetState as any).Visible === args.widgetState;
+        setIsOpen(open);
+      });
+      return () => { try { off?.(); } catch {} };
+    }, []);
+
+    return isOpen;
+  };
+  
+  const isOpen = useIsIssuesOpen();
 
   /** Initialize Decorator */
   useEffect(() => {
-    //IssuesApi.enableDecorations(issueDecorator);
+    if (!isOpen) return;
+    IssuesApi.enableDecorations(issueDecorator);
     return () => {
       IssuesApi.clearDecoratorPoints(issueDecorator);
       IssuesApi.disableDecorations(issueDecorator);
     };
-  }, [issueDecorator]);
+  }, [issueDecorator, isOpen]);
 
   // --- 새 Viewport가 열릴 때마다 데코레이터 재부착 + 마커 리드로우
   useEffect(() => {
+    if (!isOpen) return;
     const vm = IModelApp?.viewManager as any;
     if (!vm) return;
 
@@ -126,6 +168,7 @@ const IssuesWidget = () => {
     // 공통 처리 로직
     const bump = (vp?: any) => {
       try {
+        if (!isOpen) return;
         IssuesApi.enableDecorations(issueDecorator);
         setMarkerVersion((v) => v + 1);
 
@@ -135,10 +178,9 @@ const IssuesWidget = () => {
           : vp?.viewport?.invalidateRenderPlan ? vp.viewport
           : undefined;
 
-        if (!cand) return;  
-
-        cand?.invalidateRenderPlan?.();
-        cand?.renderFrame?.();
+        if (!cand || cand.isDisposed) return;
+        cand.invalidateRenderPlan?.();
+        safeRequestRedraw(cand);
       } catch {/* swallow */}
     };
 
@@ -162,16 +204,16 @@ const IssuesWidget = () => {
     }
 
     return () => handlers.forEach(fn => fn());
-  }, [issueDecorator]);
+  }, [issueDecorator, isOpen]);
 
   // --- 활성 Viewport가 바뀌면 재부착 + 한 프레임 렌더
   useEffect(() => {
-    if (!viewport) return;
+    if (!isOpen || !viewport || viewport.isDisposed) return;
     IssuesApi.enableDecorations(issueDecorator);
     setMarkerVersion((v) => v + 1);
-    viewport?.invalidateRenderPlan?.();
-    viewport?.renderFrame?.();
-  }, [viewport, issueDecorator]);
+    viewport.invalidateRenderPlan?.();
+    safeRequestRedraw(viewport);
+  }, [viewport, issueDecorator, isOpen]);
 
   /** Set the preview Images on issue load */
   useEffect(() => {
@@ -630,9 +672,10 @@ const IssuesWidget = () => {
       if (!IModelApp.tools.find(OneShotPointTool.toolId)) {
         // ← 네임스페이스를 두 번째 인자로 넘겨서 등록
         IModelApp.tools.register(OneShotPointTool, "Issues");
-      }
+      } else {
 
-      await IModelApp.tools.run(OneShotPointTool.toolId);
+      //await IModelApp.tools.run(OneShotPointTool.toolId);
+      }
     });
   }
 
@@ -727,9 +770,11 @@ const IssuesWidget = () => {
 
     try {
       // 1) 한 프레임 보장 후 안전 캡처
-      vp.invalidateRenderPlan();
-      vp.synchWithView();
-      vp.renderFrame();
+      if (!vp.isDisposed) {
+        vp.invalidateRenderPlan();
+        vp.synchWithView();
+        safeRequestRedraw(vp);
+      }
       const blob = await captureViewportImageBlob(vp, 800, 600);
 
       // 6) 좌표가 없으면, 뷰 중심을 pin으로 큐잉(서버 저장 시 함께 반영)
@@ -771,10 +816,10 @@ const IssuesWidget = () => {
       IssuesApi.enableDecorations(issueDecorator);
       setMarkerVersion(v => v + 1);
 
-      if (vp) {  
+      if (vp && !vp.isDisposed) {
         vp.invalidateRenderPlan();
-        vp.renderFrame();
-      }  
+        safeRequestRedraw(vp);
+      }
     }
   };
 
@@ -821,25 +866,29 @@ const IssuesWidget = () => {
     if (!ev?.addListener) return;
 
     const handler = (args: any) => {
-      const wid = args?.widgetDef?.id ?? args?.widgetId;
-      if (wid !== "IssuesWidget") return;
+      try {
+        const wid = args?.widgetDef?.id ?? args?.widgetId;
+        if (wid !== "IssuesWidget") return;
 
-      const isOpen =
-        args.widgetState === WidgetState.Open ||
-        (WidgetState as any).Visible === args.widgetState;
+        const isOpen =
+          args.widgetState === WidgetState.Open ||
+          (WidgetState as any).Visible === args.widgetState;
 
-      if (!isOpen) {
-        IssuesApi.clearDecoratorPoints(issueDecorator);
-        IssuesApi.disableDecorations(issueDecorator);
-      } else {
-        const vp = IModelApp?.viewManager?.selectedView;
-        if (!vp) return;
-        IssuesApi.enableDecorations(issueDecorator);
-        setMarkerVersion((v) => v + 1);
-        
-        vp?.invalidateRenderPlan?.();
-        vp?.renderFrame?.();
-      }
+        if (!isOpen) {
+          IssuesApi.clearDecoratorPoints(issueDecorator);
+          IssuesApi.disableDecorations(issueDecorator);
+        } else {
+          const vp = IModelApp?.viewManager?.selectedView;
+          if (!vp) return;
+          IssuesApi.enableDecorations(issueDecorator);
+          setMarkerVersion((v) => v + 1);
+          
+          if (!vp.isDisposed) {
+            vp.invalidateRenderPlan?.();
+            safeRequestRedraw(vp);
+          }
+        }
+      } catch { /* swallow */ }  
     };
 
     const remove = ev.addListener(handler);

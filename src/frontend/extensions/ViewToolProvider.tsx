@@ -19,6 +19,7 @@ import * as SwipingComparisonApi from "./SwipingComparison/SwipingComparisonApi"
 import { SwipingComparisonWidget } from "./SwipingComparison/SwipingComparisonWidget";
 import { goProjectHome,goLoginPanel } from "../services/navigation";
 import { requestLogout } from "../services/AuthContext";
+import { emitUi } from "../services/uiBus";
 
 // SyncUi 이벤트 아이디 (아무 문자열로 유일하면 됨)
 const SYNCID_VIEWCLIP = "viewclip:state-changed";
@@ -29,6 +30,7 @@ export class ViewToolProvider implements UiItemsProvider {
   private _enabled = false; // 기본 OFF
   private _swipeOpen = false; // SwipingComparisonWidget 토글 상태
   private _issuesOn = false;
+  private _docsOn = false; 
 
   /** 공통 위젯 헬퍼 */
   private _openWidget(id: string) {
@@ -76,6 +78,7 @@ export class ViewToolProvider implements UiItemsProvider {
       this._enabled = false;
       this._swipeOpen = false;
       this._issuesOn = false;
+      this._docsOn = false;
     };
 
     // ====== Main 그룹 (맨 위) ======
@@ -84,9 +87,7 @@ export class ViewToolProvider implements UiItemsProvider {
       icon: "O",
       label: "Snapshot Open",
       execute: async () => {
-        // 웹 전용 UX를 염두: 일단 버튼만. 후속 작업에서 파일 선택/라우팅 연결.
-        // TODO: 파일 선택 다이얼로그/라우팅 연결 지점.
-        // eslint-disable-next-line no-console
+        emitUi({ type: "open-snapshot" });
         console.log("[Main] Snapshot Open clicked");
       },
     });
@@ -96,8 +97,7 @@ export class ViewToolProvider implements UiItemsProvider {
       icon: "R",
       label: "Reality Data",
       execute: async () => {
-        // TODO: Reality Data 브라우저/연결 UI로 확장 예정.
-        // eslint-disable-next-line no-console
+        emitUi({ type: "open-reality" });
         console.log("[Main] Reality Data clicked");
       },
     });
@@ -240,6 +240,38 @@ export class ViewToolProvider implements UiItemsProvider {
       items: [toggleAction, swipeToggle]
     });
 
+    
+    // === Data 그룹: Document 패널 토글 ===
+    const docsToggle = ToolbarItemUtilities.createActionItem({
+      id: "docs-toggle",
+      icon: "D",                // 필요시 아이콘 교체
+      label: "Document",
+      execute: async () => {
+        const front = UiFramework.frontstages.activeFrontstageDef;
+        const w = front?.findWidgetDef("DocumentsWidget");
+        if (!w) {
+          console.warn("[Documents] widget not found (provider not registered yet)");
+          return;
+        }
+        const opening = !this._docsOn;
+        if (opening) {
+          w.setWidgetState(WidgetState.Open);
+          this._docsOn = true;
+        } else {
+          w.setWidgetState(WidgetState.Hidden);
+          this._docsOn = false;
+        }
+      },
+    });
+
+    const dataGroup = ToolbarItemUtilities.createGroupItem({
+      id: "data-group",
+      label: "Data",
+      icon: "DT",
+      groupPriority: 95, // View Tools(90)와 Mark(99) 사이 정도
+      items: [docsToggle],
+    });
+
     // ✅ MK(마크) 그룹: Issues 토글
     const issuesToggle = ToolbarItemUtilities.createActionItem({
       id: "issues-toggle",
@@ -248,6 +280,10 @@ export class ViewToolProvider implements UiItemsProvider {
       execute: async () => {
         const front = UiFramework.frontstages.activeFrontstageDef;
         const issuesW = front?.findWidgetDef("IssuesWidget"); // ← 위젯 id 확인됨
+        if (!issuesW) {
+          console.warn("[Issues] widget not found (provider not registered yet)");
+          return;
+        }
         const opening = !this._issuesOn;
 
         if (opening) {
@@ -268,7 +304,7 @@ export class ViewToolProvider implements UiItemsProvider {
       items: [issuesToggle],
     });
 
-    return [mainGroup, viewToolsGroup, mkGroup];
+    return [mainGroup, viewToolsGroup,dataGroup, mkGroup];
   }
 
   /** (하단) 패널에 위젯 추가 – 이미 만든 위젯 사용 */
