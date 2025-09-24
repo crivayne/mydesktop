@@ -75,6 +75,7 @@ export class ViewToolProvider implements UiItemsProvider {
       // 내부 상태 플래그 리셋
       this._enabled = false;
       this._swipeOpen = false;
+      this._issuesOn = false;
     };
 
     // ====== Main 그룹 (맨 위) ======

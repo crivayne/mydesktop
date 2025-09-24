@@ -54,7 +54,8 @@ function normalizeSite(r: SiteRow): SiteRow & { snapshotUrl?: string | null } {
   return { ...r, snapshotUrl: r.snapshotUrl ?? r.snapshot_url ?? r.snapshot ?? null };
 }
 
-export const Api = {
+
+export const Api: any = {
   // ---- Sites ----
   async listSites(): Promise<SiteRow[]> {
     const r = await fetch(`${base()}/sites/list.php`, { headers: jsonHeaders() });
@@ -119,35 +120,6 @@ export const Api = {
     if (!r.ok) throw new Error(String(r.status));
     return r.json();
   },
-
-  /* //✅ 글로벌 업로드(서버의 지정 폴더로 저장) — 통파일업로드
-  async uploadSnapshotGlobal(file: File, name?: string, onProgress?: (p: number) => void) {
-    const fd = new FormData();
-    fd.append("snapshot", file);                   // ($_FILES['snapshot'])
-    if (name) fd.append("name", name);
-    const createdBy = localStorage.getItem("itwin-user-id") || "";
-    if (createdBy) fd.append("createdBy", createdBy);
-
-    // fetch는 업로드 진행률 이벤트가 없어서 XHR 사용
-    const url = `${base()}/snapshots/uploadsnapshot.php`;
-
-    return await new Promise<any>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url, true);
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
-      };
-      xhr.onerror = () => reject(new Error("Network error"));
-      xhr.onload = () => {
-        const text = xhr.responseText || "";
-        if (xhr.status < 200 || xhr.status >= 300) return reject(new Error(`${xhr.status} ${xhr.statusText}: ${text}`));
-        let json: any; try { json = JSON.parse(text); } catch { return reject(new Error(`Invalid JSON: ${text}`)); }
-        if (!(json?.success ?? json?.ok)) return reject(new Error(`서버에러: ${json?.message || "업로드 실패"}`));
-        resolve(json);
-      };
-      xhr.send(fd);
-    });
-  }, */
 
   /** ✅ 글로벌 업로드(서버의 지정 폴더로 저장) — 큰 파일은 자동으로 분할 업로드 */
   async uploadSnapshotGlobal(file: File, name?: string, onProgress?: (p: number) => void) {
@@ -272,3 +244,174 @@ export const Api = {
   },
 };
 export type { SiteRow, SnapshotRow };
+
+// ===== reality 타입 =====
+export type RealityRow = {
+  id: number;
+  siteId: string;
+  name: string;
+  kind: "3dtiles" | "3sm" | "opc" | string;
+  url: string;
+  enabled: 0 | 1;
+  order_index: number;
+  createdBy?: string | null;
+  createdAt?: string | null;
+  lastOpenedAt?: string | null;
+};
+
+  // ===== reality API =====
+  async function listSiteReality(siteId: string): Promise<RealityRow[]> {
+    const r = await fetch(`${base()}/site-reality/list.php?siteId=${encodeURIComponent(siteId)}`);
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  }
+
+  async function addSiteReality(input: {
+    siteId: string; name: string; kind: string; url: string;
+    enabled?: number; order_index?: number;
+  }) {
+    const createdBy = localStorage.getItem("itwin-user-id") || "";
+    const r = await fetch(`${base()}/site-reality/add.php`, {
+      method: "POST", headers: jsonHeaders(),
+      body: JSON.stringify({ ...input, createdBy }),
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  }
+
+  async function updateSiteReality(input: { id: number; enabled?: number; order_index?: number; }) {
+    const r = await fetch(`${base()}/site-reality/update.php`, {
+      method: "POST", headers: jsonHeaders(), body: JSON.stringify(input),
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  }
+
+  async function setRealityLastOpened(id: number) {
+    const r = await fetch(`${base()}/site-reality/setLastOpened.php`, {
+      method: "POST", headers: jsonHeaders(), body: JSON.stringify({ id }),
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  }
+
+  async function deleteSiteReality(id: number) {
+    const r = await fetch(`${base()}/site-reality/delete.php`, {
+      method: "POST", headers: jsonHeaders(), body: JSON.stringify({ id }),
+    });
+    if (!r.ok) throw new Error(String(r.status));
+    return r.json();
+  }
+
+(Api as any).listSiteReality       = listSiteReality;
+(Api as any).addSiteReality        = addSiteReality;
+(Api as any).updateSiteReality     = updateSiteReality;
+(Api as any).setRealityLastOpened  = setRealityLastOpened;
+(Api as any).deleteSiteReality     = deleteSiteReality;
+
+// ===== reality: 글로벌 라이브러리 타입 =====
+export type RealityLibRow = {
+  id: number; name: string; kind: string; url: string;
+  createdBy?: string|null; createdAt?: string|null;
+};
+
+// 목록
+async function listRealityLibrary(): Promise<RealityLibRow[]> {
+  const r = await fetch(`${base()}/site-reality/list.php`);
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+
+// 업로드 (단일/분할 자동 선택, siteId 없음)
+async function uploadRealityZipSingle(file: File, name?: string, onProgress?: (p:number)=>void) {
+  const BASE = base();
+  const fd = new FormData();
+  fd.append("zip", file);
+  if (name) fd.append("name", name);
+  const createdBy = localStorage.getItem("itwin-user-id") || "";
+  if (createdBy) fd.append("createdBy", createdBy);
+
+  return await new Promise<any>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/site-reality/uploadzip.php`, true);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded/e.total); };
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.onload = () => {
+      const text = xhr.responseText || "";
+      if (xhr.status<200||xhr.status>=300) return reject(new Error(`${xhr.status} ${xhr.statusText}: ${text}`));
+      try { const j=JSON.parse(text); if (!j?.success) return reject(new Error(j?.message||"upload failed")); resolve(j); }
+      catch { reject(new Error(`Invalid JSON: ${text}`)); }
+    };
+    xhr.send(fd);
+  });
+}
+
+async function uploadRealityZipChunked(file: File, name?: string, onProgress?: (p:number)=>void) {
+  const BASE = base();
+  const createdBy = localStorage.getItem("itwin-user-id") || "";
+  const PART = 100*1024*1024;
+  const init = await fetch(`${BASE}/site-reality/chunk/init.php`, {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ name: name||file.name.replace(/\.zip$/i,''), size:file.size, partSize:PART, createdBy }),
+  });
+  if (!init.ok) throw new Error(await init.text());
+  const j:any = await init.json(); if (!j?.success) throw new Error(j?.message||"init error");
+  const id = j.id;
+
+  let sent=0, total=file.size, parts=Math.ceil(total/PART);
+  for (let index=0; index<parts; index++){
+    const start=index*PART, end=Math.min(total,start+PART);
+    const chunk=file.slice(start,end);
+    await new Promise<void>((resolve,reject)=>{
+      const fd=new FormData();
+      fd.append("id",id);
+      fd.append("index",String(index));
+      fd.append("chunk",chunk,`${file.name}.part${index}`);
+      const xhr=new XMLHttpRequest(); xhr.open("POST", `${BASE}/site-reality/chunk/part.php`, true);
+      xhr.upload.onprogress=(e)=>{ if(onProgress&&e.lengthComputable) onProgress((sent+e.loaded)/total); };
+      xhr.onerror=()=>reject(new Error("Network error"));
+      xhr.onload=()=>{ try{ const x=JSON.parse(xhr.responseText||"{}"); if(!x.success) return reject(new Error(x.message||"part error")); }
+                      catch{ return reject(new Error("Invalid JSON from part")); }
+                      sent+=chunk.size; if(onProgress) onProgress(sent/total); resolve(); };
+      xhr.send(fd);
+    });
+  }
+  const fin=await fetch(`${BASE}/site-reality/chunk/finish.php`, {
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id })
+  });
+  if (!fin.ok) throw new Error(await fin.text());
+  const fj:any = await fin.json(); if (!fj?.success) throw new Error(fj?.message||"finish error");
+  return fj;
+}
+
+async function uploadRealityZip(file: File, name?: string, onProgress?: (p:number)=>void){
+  const SMALL=200*1024*1024;
+  if (file.size<=SMALL) return uploadRealityZipSingle(file, name, onProgress);
+  return uploadRealityZipChunked(file, name, onProgress);
+}
+
+// 삭제
+async function deleteRealityFromLibrary(id: number){
+  const r=await fetch(`${base()}/site-reality/delete.php`,{
+    method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ id })
+  });
+  if(!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+
+// 라이브러리 → 사이트 연결
+async function addSiteRealityFromLibrary(siteId: string, realityId: number, name?: string, enabled=1){
+  const createdBy = localStorage.getItem("itwin-user-id") || "";
+  const r=await fetch(`${base()}/site-reality/addFromLibrary.php`,{
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({ siteId, realityId, name, enabled, createdBy })
+  });
+  if(!r.ok) throw new Error(String(r.status));
+  return r.json();
+}
+
+// Api 주입
+(Api as any).listRealityLibrary = listRealityLibrary;
+(Api as any).uploadRealityZip  = uploadRealityZip;
+(Api as any).deleteRealityFromLibrary = deleteRealityFromLibrary;
+(Api as any).addSiteRealityFromLibrary = addSiteRealityFromLibrary;

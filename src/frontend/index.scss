@@ -6,7 +6,8 @@
 @import '@itwin/itwinui-variables/index.css';
 @import '@itwin/itwinui-css/css/global.css';
 
-body {
+html, body, #root {
+  height: 100%;
   margin: 0;
   padding: 0;
   font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;

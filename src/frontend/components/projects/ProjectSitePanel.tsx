@@ -3,7 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { IpcApp } from "@itwin/core-frontend";
 import { channelName } from "../../../common/ViewerConfig";
 import { Api } from "../../services/api";
+import type { RealityLibRow } from "../../services/api";
 import BusyOverlay from "../common/BusyOverlay";
+import RealityLibraryDialog from "../common/RealityLibraryDialog";
 
 // 간단 폼 POST (PHP의 $_POST 호환)
 async function postForm<T>(url: string, data: Record<string, string>) {
@@ -102,6 +104,8 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
 
   const [progressPct, setProgressPct] = useState<number | null>(null);
   const [progressLabel, setProgressLabel] = useState<string>("");  // 상황별 라벨
+
+  const [libOpen, setLibOpen] = useState(false);
 
 
   // 이름 입력을 Promise로 받는 헬퍼
@@ -348,7 +352,7 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
       await IpcApp.callIpcChannel(channelName, "setAppProgress", 0, "normal");
 
       try {
-        const res = await Api.uploadSnapshotGlobal(f, displayName, async (p) => {
+        const res = await Api.uploadSnapshotGlobal(f, displayName, async (p: number) => {
           setProgressPct(p);
           await IpcApp.callIpcChannel(channelName, "setAppProgress", p, "normal");
         });
@@ -375,8 +379,12 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
         <button onClick={locateImporter}>Importer 2.0 경로 지정…</button>
         <button onClick={runImodelImporterCLI}>Importer 2.0 실행(CLI)…</button>
 
-        {isAdmin}
-        <button disabled={busy} onClick={uploadSnapshotGlobal}>스냅샷 업로드(서버)…</button>
+        {isAdmin && (
+          <button disabled={busy} onClick={uploadSnapshotGlobal}>스냅샷 업로드(서버)…</button>
+        )}
+        {isAdmin && (
+          <button onClick={()=>setLibOpen(true)}>Reality Data…</button>
+        )}
 
         {isAdmin && (
           <>
@@ -459,7 +467,11 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
         {/* Sites */}
         <section style={{ border: "1px solid #333", borderRadius: 8, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "10px 12px", borderBottom: "1px solid #333" }}>
-            <strong>Sites {selectedProjectId !== "ALL" ? `(Project: ${projects.find(p => p.id === selectedProjectId)?.name || ""})` : "(ALL)"}</strong>
+            <strong>
+              Sites {selectedProjectId !== "ALL"
+                ? `(Project: ${projects.find((p: Project) => p.id === selectedProjectId)?.name || ""})`
+                : "(ALL)"}
+            </strong>
           </div>
 
           <div style={{ padding: 8, overflow: "auto" }}>
@@ -531,6 +543,11 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
         }}
       />
       <BusyOverlay open={busy} label={progressLabel} percent={progressPct} />
+      <RealityLibraryDialog
+        open={libOpen}
+        onClose={()=>setLibOpen(false)}
+        admin
+      />
     </div>
   );
 }

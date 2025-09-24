@@ -68,12 +68,13 @@
   }
 
   .issue-preview {
-    width: 100x;
+    width: 100px;
     height: 80px;
     margin-right: 8px;
     background-color: var(--buic-background-2);
     box-sizing: border-box;
     position: relative;
+    overflow: hidden; /* 썸네일 크롭 안정화 */
 
     .issue-status {
       position: absolute;

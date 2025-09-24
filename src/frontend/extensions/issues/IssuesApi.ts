@@ -10,6 +10,8 @@ import { QueryRowFormat } from "@itwin/core-common";
 import { MarkerData, MarkerPinDecorator } from "./marker-pin/MarkerPinDecorator";
 import { IssueGet } from "./IssuesClient";
 
+const _registeredDecorators = new WeakSet<MarkerPinDecorator>();
+
 export interface LabelWithId extends LabelDefinition {
   id: string;
     /** 선택 요소의 BBox(있으면 채워짐) */
@@ -55,13 +57,16 @@ export default class IssuesApi {
   }
 
   public static enableDecorations(decorator: MarkerPinDecorator) {
+    if (_registeredDecorators.has(decorator)) return;        // 이미 등록돼 있으면 무시
     IModelApp.viewManager.addDecorator(decorator);
+    _registeredDecorators.add(decorator);
   }
 
   public static disableDecorations(decorator: MarkerPinDecorator) {
+    if (!_registeredDecorators.has(decorator)) return;        // 등록 안돼 있으면 무시
     IModelApp.viewManager.dropDecorator(decorator);
+    _registeredDecorators.delete(decorator);
   }
-
   public static clearDecoratorPoints(decorator: MarkerPinDecorator) {
     decorator.clearMarkers();
   }

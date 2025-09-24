@@ -2,9 +2,12 @@
 import React from "react";
 import RenderSettings from "./RenderSettings";
 import KeySettings from "./KeySettings";
+import { useAuth } from "../../services/AuthContext"; // ★ 추가
 
 export default function SettingsPanel(props: { onClose: () => void }) {
   const [tab, setTab] = React.useState<"render" | "keys">("render");
+  const { auth } = useAuth(); // ★ 현재 로그인 정보
+  const accountKey = (auth?.userId || "guest").toLowerCase(); // ★ 계정키 결정
 
   const TabButton: React.FC<{ id: "render" | "keys"; label: string }> = ({ id, label }) => (
     <button
@@ -39,7 +42,7 @@ export default function SettingsPanel(props: { onClose: () => void }) {
         {tab === "render" ? (
           <RenderSettings open={true} onClose={props.onClose} />
         ) : (
-          <KeySettings />
+          <KeySettings accountKey={accountKey} />
         )}
       </div>
     </div>

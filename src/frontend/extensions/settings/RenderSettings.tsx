@@ -203,150 +203,156 @@ export default function RenderSettings(props: { open: boolean; onClose: () => vo
   if (!props.open) return null;
 
   return (
-    <div style={{position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999}}>
-      <div style={{width:480, background:"#1e1e1e", border:"1px solid #333", borderRadius:10, padding:16}}>
-        <h3 style={{marginTop:0}}>Rendering settings</h3>
+    <div style={{
+      width: 520,
+      background: "#1e1e1e",
+      border: "1px solid #333",
+      borderRadius: 10,
+      padding: 16,
+      maxHeight: "70vh",
+      overflowY: "auto"
+    }}>
+      <h3 style={{marginTop:0}}>Rendering settings</h3>
 
-        {/* Tiles & Memory */}
-        <div style={{borderTop:"1px solid #333", paddingTop:12}}>
-          <h4 style={{margin:"0 0 8px"}}>Tiles & Memory</h4>
+      {/* Tiles & Memory */}
+      <div style={{borderTop:"1px solid #333", paddingTop:12}}>
+        <h4 style={{margin:"0 0 8px"}}>Tiles & Memory</h4>
 
-          <label style={{display:"block", margin:"10px 0 4px"}}>Default tile size modifier (0.5 ~ 4.0)</label>
-          <input
-            type="range" min={0.5} max={4} step={0.25}
-            value={tileMul} onChange={(e)=>setTileMul(parseFloat(e.target.value))}
-            style={{width:"100%"}}
-          />
-          <div style={{opacity:.8, fontSize:12}}>현재: {Number(tileMul).toFixed(2)}</div>
+        <label style={{display:"block", margin:"10px 0 4px"}}>Default tile size modifier (0.5 ~ 4.0)</label>
+        <input
+          type="range" min={0.5} max={4} step={0.25}
+          value={tileMul} onChange={(e)=>setTileMul(parseFloat(e.target.value))}
+          style={{width:"100%"}}
+        />
+        <div style={{opacity:.8, fontSize:12}}>현재: {Number(tileMul).toFixed(2)}</div>
 
-          <label style={{display:"block", margin:"14px 0 4px"}}>GPU memory limit (MB, 0=무제한)</label>
-          <input
-            type="number" min={0} step={128}
-            value={isNaN(Number(gpuMb)) ? 0 : gpuMb}
-            onChange={(e)=>setGpuMb(parseInt(e.target.value || "0", 10))}
-            style={{width:140}}
-          />
-          <div style={{opacity:.7, fontSize:12, marginTop:4}}>
-            너무 낮으면 타일이 자주 폐기/재요청되어 느려질 수 있습니다.
-          </div>
-
-          <div style={{display:"flex", gap:8, marginTop:10}}>
-            <button onClick={applyTileAndMemory}>Apply tiles & memory</button>
-          </div>
+        <label style={{display:"block", margin:"14px 0 4px"}}>GPU memory limit (MB, 0=무제한)</label>
+        <input
+          type="number" min={0} step={128}
+          value={isNaN(Number(gpuMb)) ? 0 : gpuMb}
+          onChange={(e)=>setGpuMb(parseInt(e.target.value || "0", 10))}
+          style={{width:140}}
+        />
+        <div style={{opacity:.7, fontSize:12, marginTop:4}}>
+          너무 낮으면 타일이 자주 폐기/재요청되어 느려질 수 있습니다.
         </div>
 
-        {/* Visual Effects */}
-        <div style={{borderTop:"1px solid #333", paddingTop:12, marginTop:12}}>
-          <h4 style={{margin:"0 0 8px"}}>Visual effects</h4>
-          {!hasView && <div style={{fontSize:12, opacity:.7, marginBottom:8}}>활성 뷰가 없습니다. 뷰어에서 모델을 연 뒤 적용하세요.</div>}
+        <div style={{display:"flex", gap:8, marginTop:10}}>
+          <button onClick={applyTileAndMemory}>Apply tiles & memory</button>
+        </div>
+      </div>
 
-          <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
-            <input type="checkbox" checked={shadows} onChange={(e)=>setShadows(e.target.checked)} disabled={!hasView}/>
-            Shadows
-          </label>
-          <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
-            <input type="checkbox" checked={ao} onChange={(e)=>setAo(e.target.checked)} disabled={!hasView}/>
-            Ambient occlusion (SSAO)
-          </label>
-          <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
-            <input type="checkbox" checked={edges} onChange={(e)=>setEdges(e.target.checked)} disabled={!hasView}/>
-            Visible edges
-          </label>
-          <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
-            <input type="checkbox" checked={transparency} onChange={(e)=>setTransparency(e.target.checked)} disabled={!hasView}/>
-            Transparency
-          </label>
+      {/* Visual Effects */}
+      <div style={{borderTop:"1px solid #333", paddingTop:12, marginTop:12}}>
+        <h4 style={{margin:"0 0 8px"}}>Visual effects</h4>
+        {!hasView && <div style={{fontSize:12, opacity:.7, marginBottom:8}}>활성 뷰가 없습니다. 뷰어에서 모델을 연 뒤 적용하세요.</div>}
 
-          <div style={{display:"flex", gap:8, marginTop:10}}>
-            <button onClick={applyViewFlags} disabled={!hasView}>Apply effects</button>
-          </div>
+        <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
+          <input type="checkbox" checked={shadows} onChange={(e)=>setShadows(e.target.checked)} disabled={!hasView}/>
+          Shadows
+        </label>
+        <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
+          <input type="checkbox" checked={ao} onChange={(e)=>setAo(e.target.checked)} disabled={!hasView}/>
+          Ambient occlusion (SSAO)
+        </label>
+        <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
+          <input type="checkbox" checked={edges} onChange={(e)=>setEdges(e.target.checked)} disabled={!hasView}/>
+          Visible edges
+        </label>
+        <label style={{display:"flex", alignItems:"center", gap:8, margin:"6px 0"}}>
+          <input type="checkbox" checked={transparency} onChange={(e)=>setTransparency(e.target.checked)} disabled={!hasView}/>
+          Transparency
+        </label>
+
+        <div style={{display:"flex", gap:8, marginTop:10}}>
+          <button onClick={applyViewFlags} disabled={!hasView}>Apply effects</button>
+        </div>
+      </div>
+
+      {/* Background / Skybox / Map */}
+      <div style={{borderTop:"1px solid #333", paddingTop:12, marginTop:12}}>
+        <h4 style={{margin:"0 0 8px"}}>Background</h4>
+
+        {/* 배경맵/스카이박스/그라데이션 토글 */}
+        <div style={{display:"flex", gap:18, flexWrap:"wrap", marginBottom:10}}>
+          <label style={{display:"flex", alignItems:"center", gap:8}}>
+            <input type="checkbox" checked={bgMap} onChange={(e)=>setBgMap(e.target.checked)} disabled={!hasView}/>
+            Background map
+          </label>
+          <label style={{display:"flex", alignItems:"center", gap:8}}>
+            <input type="checkbox" checked={skybox} onChange={(e)=>setSkybox(e.target.checked)} disabled={!hasView || !is3d || useGradient}/>
+            Skybox
+          </label>
+          <label style={{display:"flex", alignItems:"center", gap:8}}>
+            <input type="checkbox" checked={useGradient} onChange={(e)=>setUseGradient(e.target.checked)} disabled={!hasView || !is3d}/>
+            Gradient sky
+          </label>
         </div>
 
-        {/* Background / Skybox / Map */}
-        <div style={{borderTop:"1px solid #333", paddingTop:12, marginTop:12}}>
-          <h4 style={{margin:"0 0 8px"}}>Background</h4>
-
-          {/* 배경맵/스카이박스/그라데이션 토글 */}
-          <div style={{display:"flex", gap:18, flexWrap:"wrap", marginBottom:10}}>
-            <label style={{display:"flex", alignItems:"center", gap:8}}>
-              <input type="checkbox" checked={bgMap} onChange={(e)=>setBgMap(e.target.checked)} disabled={!hasView}/>
-              Background map
-            </label>
-            <label style={{display:"flex", alignItems:"center", gap:8}}>
-              <input type="checkbox" checked={skybox} onChange={(e)=>setSkybox(e.target.checked)} disabled={!hasView || !is3d || useGradient}/>
-              Skybox
-            </label>
-            <label style={{display:"flex", alignItems:"center", gap:8}}>
-              <input type="checkbox" checked={useGradient} onChange={(e)=>setUseGradient(e.target.checked)} disabled={!hasView || !is3d}/>
-              Gradient sky
-            </label>
-          </div>
-
-          {/* 단색 모드 */}
-          {!useGradient && (
-            <div style={{display:"flex", alignItems:"center", gap:12, marginBottom:10}}>
-              <input
-                type="color"
-                value={bgHex}
-                onChange={(e)=>setBgHex(e.target.value)}
-                disabled={!hasView}
-                aria-label="Background color"
-              />
-              <input
-                type="text"
-                value={bgHex}
-                onChange={(e)=>setBgHex(e.target.value)}
-                placeholder="#RRGGBB"
-                disabled={!hasView}
-                style={{width:110}}
-              />
-              <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
-                <button onClick={()=>setBgHex("#1e1e1e")} disabled={!hasView}>Dark</button>
-                <button onClick={()=>setBgHex("#2b2b2b")} disabled={!hasView}>Slate</button>
-                <button onClick={()=>setBgHex("#000000")} disabled={!hasView}>Black</button>
-                <button onClick={()=>setBgHex("#ffffff")} disabled={!hasView}>White</button>
-              </div>
+        {/* 단색 모드 */}
+        {!useGradient && (
+          <div style={{display:"flex", alignItems:"center", gap:12, marginBottom:10}}>
+            <input
+              type="color"
+              value={bgHex}
+              onChange={(e)=>setBgHex(e.target.value)}
+              disabled={!hasView}
+              aria-label="Background color"
+            />
+            <input
+              type="text"
+              value={bgHex}
+              onChange={(e)=>setBgHex(e.target.value)}
+              placeholder="#RRGGBB"
+              disabled={!hasView}
+              style={{width:110}}
+            />
+            <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+              <button onClick={()=>setBgHex("#1e1e1e")} disabled={!hasView}>Dark</button>
+              <button onClick={()=>setBgHex("#2b2b2b")} disabled={!hasView}>Slate</button>
+              <button onClick={()=>setBgHex("#000000")} disabled={!hasView}>Black</button>
+              <button onClick={()=>setBgHex("#ffffff")} disabled={!hasView}>White</button>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* 그라데이션 모드 (3D 전용) */}
-          {useGradient && (
-            <div style={{display:"grid", gridTemplateColumns:"auto 1fr auto 1fr", columnGap:10, rowGap:8, alignItems:"center", marginBottom:6}}>
-              <div>Top</div>
-              <div style={{display:"flex", alignItems:"center", gap:8}}>
-                <input type="color" value={gradTop} onChange={(e)=>setGradTop(e.target.value)} disabled={!hasView || !is3d}/>
-                <input type="text" value={gradTop} onChange={(e)=>setGradTop(e.target.value)} placeholder="#RRGGBB" disabled={!hasView || !is3d} style={{width:110}}/>
-              </div>
-              <div>Bottom</div>
-              <div style={{display:"flex", alignItems:"center", gap:8}}>
-                <input type="color" value={gradBottom} onChange={(e)=>setGradBottom(e.target.value)} disabled={!hasView || !is3d}/>
-                <input type="text" value={gradBottom} onChange={(e)=>setGradBottom(e.target.value)} placeholder="#RRGGBB" disabled={!hasView || !is3d} style={{width:110}}/>
-              </div>
+        {/* 그라데이션 모드 (3D 전용) */}
+        {useGradient && (
+          <div style={{display:"grid", gridTemplateColumns:"auto 1fr auto 1fr", columnGap:10, rowGap:8, alignItems:"center", marginBottom:6}}>
+            <div>Top</div>
+            <div style={{display:"flex", alignItems:"center", gap:8}}>
+              <input type="color" value={gradTop} onChange={(e)=>setGradTop(e.target.value)} disabled={!hasView || !is3d}/>
+              <input type="text" value={gradTop} onChange={(e)=>setGradTop(e.target.value)} placeholder="#RRGGBB" disabled={!hasView || !is3d} style={{width:110}}/>
             </div>
-          )}
-
-          <div style={{opacity:.7, fontSize:12, marginTop:2}}>
-            배경맵이 켜져 있으면 단색/그라데이션은 거의 보이지 않습니다. 그라데이션은 3D에서 Skybox로 적용됩니다.
+            <div>Bottom</div>
+            <div style={{display:"flex", alignItems:"center", gap:8}}>
+              <input type="color" value={gradBottom} onChange={(e)=>setGradBottom(e.target.value)} disabled={!hasView || !is3d}/>
+              <input type="text" value={gradBottom} onChange={(e)=>setGradBottom(e.target.value)} placeholder="#RRGGBB" disabled={!hasView || !is3d} style={{width:110}}/>
+            </div>
           </div>
+        )}
 
-          <div style={{display:"flex", gap:8, marginTop:10}}>
-            <button onClick={applyBackground} disabled={!hasView}>Apply background</button>
-          </div>
+        <div style={{opacity:.7, fontSize:12, marginTop:2}}>
+          배경맵이 켜져 있으면 단색/그라데이션은 거의 보이지 않습니다. 그라데이션은 3D에서 Skybox로 적용됩니다.
         </div>
 
-        {/* Presets */}
-        <div style={{borderTop:"1px solid #333", paddingTop:12, marginTop:12}}>
-          <h4 style={{margin:"0 0 8px"}}>Presets</h4>
-          <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
-            <button onClick={applySafePreset}>Safe (Heavy)</button>
-            <button onClick={applyQualityPreset}>Quality</button>
-          </div>
+        <div style={{display:"flex", gap:8, marginTop:10}}>
+          <button onClick={applyBackground} disabled={!hasView}>Apply background</button>
         </div>
+      </div>
 
-        <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
-          <button onClick={props.onClose}>닫기</button>
-          <button onClick={applyAll}>모두 적용 후 닫기</button>
+      {/* Presets */}
+      <div style={{borderTop:"1px solid #333", paddingTop:12, marginTop:12}}>
+        <h4 style={{margin:"0 0 8px"}}>Presets</h4>
+        <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+          <button onClick={applySafePreset}>Safe (Heavy)</button>
+          <button onClick={applyQualityPreset}>Quality</button>
         </div>
+      </div>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button onClick={props.onClose}>닫기</button>
+        <button onClick={applyAll}>모두 적용 후 닫기</button>
       </div>
     </div>
   );

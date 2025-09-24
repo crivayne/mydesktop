@@ -3,7 +3,7 @@
 * See LICENSE.md in the project root for license terms and full copyright notice.
 *--------------------------------------------------------------------------------------------*/
 
-import React from "react"; 
+import React from "react";
 import {
   Viewer,
   ViewerContentToolsProvider,
@@ -36,6 +36,10 @@ import { SettingsWidgetProvider } from "../../extensions/settings/SettingsWidget
 import { IssuesWidgetProvider } from "../../extensions/issues/IssuesWidget"
 import { registerNavigator } from "../../services/navigation";
 import TopBar from "../TopBar";
+import type { RealityLibRow } from "../../services/api";
+import RealityLibraryDialog from "../common/RealityLibraryDialog";
+import { attachByKind } from "../../services/reality";
+
 
 function PickDialog<T>(props: {
   open: boolean;
@@ -93,6 +97,7 @@ export const ViewerRoute = () => {
   const [snapDir, setSnapDir] = useState<string>("");
   const [pendingServerUrl, setPendingServerUrl] = useState<string | null>(null);
   const [showRenderSettings, setShowRenderSettings] = useState(false);
+  const [libOpen, setLibOpen] = useState(false);
   
   const navigate = useNavigate();
 
@@ -310,10 +315,54 @@ export const ViewerRoute = () => {
           />
         </div>  
       ) : (
-        // 파일이 아직 없을 때 보여줄 안내 (원래 쓰던 내용 유지/수정)
-        <div style={{ padding: 24 }}>
-          <h3>Viewer</h3>
-          <div>현재 로드된 모델이 없습니다. 상단 메뉴의 <b>File → Open</b>을 눌러 스냅샷을 선택하세요.</div>
+        // ✅ 파일이 아직 없을 때: 간단 버튼바 제공
+        <div style={{
+          padding: 24, height: "100%",
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          gap: 16
+        }}>
+          <h3 style={{ marginBottom: 8 }}>Viewer</h3>
+          <div style={{ opacity: 0.8, marginBottom: 8 }}>
+            현재 로드된 모델이 없습니다. 아래 버튼으로 스냅샷/리얼리티를 로드하세요.
+          </div>
+
+          <div style={{ display: "flex", gap: 12 }}>
+            {/* 스냅샷 열기: 기존 PickDialog 재사용 */}
+            <button
+              type="button"
+              style={{
+                padding: "8px 14px",
+                borderRadius: 6,
+                border: "1px solid #555",
+                background: "#222",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+              onClick={async () => {
+                try {
+                  const snaps = await Api.listSnapshotsAll();
+                  setSnapshots(snaps);
+                  setPickOpen(true);
+                } catch {
+                  alert("스냅샷 목록을 불러오지 못했습니다.");
+                }
+              }}
+            >
+              Snapshot Open
+            </button>
+
+            <button
+              type="button"
+              style={{ padding:"8px 14px", borderRadius:6, border:"1px solid #555", background:"#222", color:"#fff", cursor:"pointer" }}
+              onClick={()=> setLibOpen(true)}
+            >
+              Reality Data
+            </button>
+          </div>
+
+          <div style={{ fontSize: 12, opacity: 0.6 }}>
+            (뷰가 열린 뒤에는 툴바의 <b>Main</b> 그룹 버튼으로도 이용할 수 있습니다)
+          </div>
         </div>
       )}
 
@@ -352,6 +401,29 @@ export const ViewerRoute = () => {
       />
       {/* 설정 패널 */}
       <RenderSettings open={showRenderSettings} onClose={()=>setShowRenderSettings(false)} />
+      
+      <RealityLibraryDialog
+        open={libOpen}
+        onClose={()=>setLibOpen(false)}
+        onPick={async (row: RealityLibRow) => {
+          try {
+            const sId = localStorage.getItem("siteId") || "";
+            if (!sId) { alert("사이트 먼저 선택하세요."); return; }
+
+            await (Api as any).addSiteRealityFromLibrary(sId, row.id, row.name, 1);
+
+            const vp = IModelApp.viewManager.selectedView;
+            if (vp) {
+              attachByKind(vp as any, row.kind, row.url, row.name);
+            }
+
+            alert("등록/로드 완료");
+            setLibOpen(false);
+          } catch (e:any) {
+            alert("오류: " + (e.message || e));
+          }
+        }}
+      />  
     </div>
   );
 };

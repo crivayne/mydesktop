@@ -48,19 +48,23 @@ const IssuesWidget = () => {
   const iModelConnection = useActiveIModelConnection();
   const viewport = useActiveViewport();
   const [contextId, setContextId] = useState<string>();
+  // 이미 로드(또는 시도)한 썸네일 ID 기억용
+  const loadedThumbIdsRef = useRef<Set<string>>(new Set());
+  // 동시에 같은 걸 또 받지 않도록 in-flight 가드
+  const loadingThumbIdsRef = useRef<Set<string>>(new Set());
   /** All issues */
   const allIssues = useRef<IssueGet[]>([]);
   /** The issues currently being displayed */
   const [currentIssues, setCurrentIssues] = useState<IssueGet[]>([]);
-  const [previewImages, setPreviewImages] = useState<{ [displayName: string]: Blob }>({});
+  const [previewImages, setPreviewImages] = useState<Record<string, Blob>>({});
   /** The pictures / attachments that are associated with the issue */
-  const [issueAttachmentMetaData, setIssueAttachmentMetaData] = useState<{ [displayName: string]: AttachmentMetadataGet[] }>({});
+  const [issueAttachmentMetaData, setIssueAttachmentMetaData] = useState<Record<string, AttachmentMetadataGet[]>>({});
   /** The blobs for each issue's attachments */
-  const [issueAttachments, setIssueAttachments] = useState<{ [displayName: string]: Blob[] }>({});
+  const [issueAttachments, setIssueAttachments] = useState<Record<string, Blob[]>>({});
   /** The comments associated with each issue */
-  const [issueComments, setIssueComments] = useState<{ [displayName: string]: CommentGetPreferReturnMinimal[] }>({});
+  const [issueComments, setIssueComments] = useState<Record<string, CommentGetPreferReturnMinimal[]>>({});
   /** The audit trail associated with each issue */
-  const [issueAuditTrails, setIssueAuditTrails] = useState<{ [displayName: string]: AuditTrailEntryGet[] }>({});
+  const [issueAuditTrails, setIssueAuditTrails] = useState<Record<string, AuditTrailEntryGet[]>>({});
   /** The Issue to display when the user selects, if undefined, none is shown */
   const [currentIssue, setCurrentIssue] = useState<IssueGet>();
   /** The Elements linked to the issue */
@@ -112,25 +116,122 @@ const IssuesWidget = () => {
     };
   }, [issueDecorator]);
 
+  // --- 새 Viewport가 열릴 때마다 데코레이터 재부착 + 마커 리드로우
+  useEffect(() => {
+    const vm = IModelApp?.viewManager as any;
+    if (!vm) return;
+
+    const handlers: Array<() => void> = [];
+
+    // 공통 처리 로직
+    const bump = (vp?: any) => {
+      try {
+        IssuesApi.enableDecorations(issueDecorator);
+        setMarkerVersion((v) => v + 1);
+
+        // vp 추출: (1) 직접 vp (2) args.current (3) args.viewport
+        const cand = vp?.invalidateRenderPlan ? vp
+          : vp?.current?.invalidateRenderPlan ? vp.current
+          : vp?.viewport?.invalidateRenderPlan ? vp.viewport
+          : undefined;
+
+        if (!cand) return;  
+
+        cand?.invalidateRenderPlan?.();
+        cand?.renderFrame?.();
+      } catch {/* swallow */}
+    };
+
+    // onViewOpen / onViewAdded는 viewport 자체를 넘기는 버전이 많음
+    if (vm.onViewOpen?.addListener) {
+      const off = vm.onViewOpen.addListener((vp: any) => bump(vp));
+      handlers.push(() => { try { off?.(); } catch {} });
+    }
+    if (vm.onViewAdded?.addListener) {
+      const off = vm.onViewAdded.addListener((vp: any) => bump(vp));
+      handlers.push(() => { try { off?.(); } catch {} });
+    }
+    // onSelectedViewportChanged는 args 시그니처(버전별 상이)
+    if (vm.onSelectedViewportChanged?.addListener) {
+      const off = vm.onSelectedViewportChanged.addListener((...args: any[]) => {
+        const a = args[0];
+        const vp = a?.current ?? a?.viewport ?? a; // 가능한 후보
+        bump(vp);
+      });
+      handlers.push(() => { try { off?.(); } catch {} });
+    }
+
+    return () => handlers.forEach(fn => fn());
+  }, [issueDecorator]);
+
+  // --- 활성 Viewport가 바뀌면 재부착 + 한 프레임 렌더
+  useEffect(() => {
+    if (!viewport) return;
+    IssuesApi.enableDecorations(issueDecorator);
+    setMarkerVersion((v) => v + 1);
+    viewport?.invalidateRenderPlan?.();
+    viewport?.renderFrame?.();
+  }, [viewport, issueDecorator]);
+
   /** Set the preview Images on issue load */
   useEffect(() => {
-    currentIssues.map(async (issue) => {
-      if (issue.id) {
-        const metaData = await IssuesClient.getIssueAttachments(issue.id);
-        const previewAttachmentId = metaData?.attachments ? metaData.attachments[0]?.id : undefined;
-        if (previewAttachmentId !== undefined && !thumbnails.has(previewAttachmentId)) {
-          const binaryImage = await IssuesClient.getAttachmentById(issue.id, previewAttachmentId);
-          if (binaryImage)
-            setPreviewImages((prevState) => ({ ...prevState, [issue.displayName as string]: binaryImage }));
-        }
+    let cancelled = false;
 
-        /** Set the rest of the attachments in the attachmentMetaData */
-        if (metaData?.attachments) {
-          setIssueAttachmentMetaData((prevState) => ({ ...prevState, [issue.displayName as string]: metaData.attachments!.length > 1 ? metaData.attachments!.slice(1) : [] }));
+    (async () => {
+      for (const issue of currentIssues) {
+        const id = issue.id?.toString();
+        if (!id) continue;
+        if (id.startsWith("tmp-")) continue;                        // 임시 이슈는 스킵
+        if (previewImages[id]) continue;                            // 이미 state에 있음
+        if (loadedThumbIdsRef.current.has(id)) continue;            // 과거에 한 번 처리함
+        if (loadingThumbIdsRef.current.has(id)) continue;           // 지금 받고 있는 중
+
+        try {
+          loadingThumbIdsRef.current.add(id);
+
+          // 1) 서버 메타에서 "미리보기"만 가져옴(0번 첨부)
+          const meta = await IssuesClient.getIssueAttachments(id);
+          const previewAttachmentId = meta?.attachments?.[0]?.id;
+
+          // 첨부 메타(나머지)는 캐시에 저장
+          if (!cancelled) {
+            setIssueAttachmentMetaData(prev => ({
+              ...prev,
+              [id]: meta?.attachments?.slice(1) ?? [],
+            }));
+          }
+
+          if (!previewAttachmentId) {
+            // 미리보기 없음: 그래도 "처리됨"으로 마킹해서 무한 재시도 방지
+            loadedThumbIdsRef.current.add(id);
+            continue;
+          }
+
+          // 2) 썸네일 Blob 다운로드
+          const blob = await IssuesClient.getAttachmentById(id, previewAttachmentId);
+          if (!blob) {
+            loadedThumbIdsRef.current.add(id);
+            continue;
+          }
+
+          // 3) 서버의 1x1 투명 PNG 플레이스홀더 회피
+          const isTinyPlaceholder = blob.type === "image/png" && blob.size <= 100;
+          if (!cancelled && !isTinyPlaceholder) {
+            setPreviewImages(prev => ({ ...prev, [id]: blob }));
+          }
+
+          // 결과와 무관하게 “처리됨” 마크(무한 루프 방지)
+          loadedThumbIdsRef.current.add(id);
+        } finally {
+          loadingThumbIdsRef.current.delete(id);
         }
       }
-    });
-  }, [currentIssues]);
+    })();
+
+    return () => { cancelled = true; };
+    // previewImages를 dep에 넣는 이유: 어떤 이슈의 썸네일이 세팅되면
+    // 다른 이슈들에 대해서는 여전히 위 가드 덕에 중복 네트워크 없이 안전히 진행됨
+  }, [currentIssues, previewImages]);
 
   const applyView = useCallback(async (issue: IssueGet) => {
     if (!viewport) return;
@@ -200,8 +301,14 @@ const IssuesWidget = () => {
         }
       }
 
-      // 1) 좌표가 없다면 더이상 진행하지 않음(마커 못 그림)
-      if (!issue.modelPin?.location) return;
+      // 1) 좌표가 없다면: 뷰가 살아있으면 뷰 중심에 임시 핀 생성
+      if (!issue.modelPin?.location) {
+        const vp2 = IModelApp?.viewManager?.selectedView;
+        if (!vp2) return; // 뷰조차 없으면 이번엔 스킵(다음 사이클에 다시 시도)
+        const fr = vp2.view.computeFitRange();
+        const center = fr.low.interpolate(0.5, fr.high);
+        issue.modelPin = { location: center };
+      }
 
       // 2) 이하 기존 svg/icon 생성 + addDecoratorPoint 동일
       const parser = new DOMParser();
@@ -313,46 +420,48 @@ const IssuesWidget = () => {
 
   /** call the client to get the issue attachments */
   const getIssueAttachments = useCallback(async () => {
-    /** If the attachments have already been retrieved don't refetch*/
-    if (!currentIssue || (currentIssue.displayName && issueAttachments[currentIssue.displayName]))
-      return;
+    if (!currentIssue?.id) return;
+    const id = currentIssue.id;
 
-    /** Grab the attachments */
-    const metaData = issueAttachmentMetaData[currentIssue.displayName!];
-    metaData?.forEach(async (attachment) => {
-      const image = await IssuesClient.getAttachmentById(currentIssue.id!, attachment.id!);
-      if (image)
-        setIssueAttachments((prevState) => ({ ...prevState, [currentIssue.displayName as string]: currentIssue.displayName! in prevState ? [...prevState[currentIssue.displayName!], image] : [image] }));
-    });
-  }, [currentIssue, issueAttachmentMetaData, issueAttachments]);
+    // 이미 받아온 적 있으면 스킵
+    if (issueAttachments[id]) return;
+
+    const metaData = issueAttachmentMetaData[id];
+    if (!metaData || metaData.length === 0) return;
+
+    // 첨부 파일들 개별 다운로드
+    for (const attachment of metaData) {
+      const image = await IssuesClient.getAttachmentById(id, attachment.id!);
+      if (image) {
+        setIssueAttachments((prev) => ({
+          ...prev,
+          [id]: id in prev ? [...prev[id], image] : [image],
+        }));
+      }
+    }
+  }, [currentIssue?.id, issueAttachmentMetaData, issueAttachments]);
 
   /** call the client to get the issue comments */
   const getIssueComments = useCallback(async () => {
-    /** If the comments have already been retrieved don't refetch*/
-    if (!currentIssue || (currentIssue.displayName && issueComments[currentIssue.displayName]))
-      return;
+    if (!currentIssue?.id) return;
+    const id = currentIssue.id;
 
-    /** Grab the comments */
-    const commentsResponse = await IssuesClient.getIssueComments(currentIssue.id!);
-    const comments = commentsResponse?.comments ? commentsResponse?.comments : [];
+    if (issueComments[id]) return;
 
-    /** Set the comments */
-    setIssueComments((prevState) => ({ ...prevState, [currentIssue.displayName as string]: comments }));
-  }, [currentIssue, issueComments]);
+    const res = await IssuesClient.getIssueComments(id);
+    setIssueComments((prev) => ({ ...prev, [id]: res?.comments ?? [] }));
+  }, [currentIssue?.id, issueComments]);
 
   /** call the client to get the issue Audit trail */
   const getIssueAuditTrail = useCallback(async () => {
-    /** If the comments have already been retrieved don't refetch*/
-    if (!currentIssue || (currentIssue.displayName && issueAuditTrails[currentIssue.displayName]))
-      return;
+    if (!currentIssue?.id) return;
+    const id = currentIssue.id;
 
-    /** Grab the comments */
-    const auditResponse = await IssuesClient.getIssueAuditTrail(currentIssue.id!);
-    const auditTrail = auditResponse?.auditTrailEntries ? auditResponse.auditTrailEntries : [];
+    if (issueAuditTrails[id]) return;
 
-    /** Set the audit trail for the currentIssue */
-    setIssueAuditTrails((prevState) => ({ ...prevState, [currentIssue.displayName as string]: auditTrail }));
-  }, [currentIssue, issueAuditTrails]);
+    const res = await IssuesClient.getIssueAuditTrail(id);
+    setIssueAuditTrails((prev) => ({ ...prev, [id]: res?.auditTrailEntries ?? [] }));
+  }, [currentIssue?.id, issueAuditTrails]);
 
 
   // 오버레이 헬퍼
@@ -556,6 +665,53 @@ const IssuesWidget = () => {
     setEditXYZ({ x: pt.x, y: pt.y, z: pt.z });
   };
 
+  //캡쳐 헬퍼
+  async function captureViewportImageBlob(vp: any, W = 512, H = 288): Promise<Blob> {
+    // 1) iTwin Viewport의 내부 이미지를 직접 읽기 (가장 안전)
+    if (typeof vp.readImageBuffer === "function") {
+      const ib = await vp.readImageBuffer({ size: { x: W, y: H } }); // 5.x에서 지원
+      if (ib && ib.width && ib.height && ib.data) {
+        // RGBA Uint8Array → Canvas → Blob
+        const off = document.createElement("canvas");
+        off.width = ib.width;
+        off.height = ib.height;
+        const ctx = off.getContext("2d")!;
+        const imgData = new ImageData(new Uint8ClampedArray(ib.data.buffer), ib.width, ib.height);
+        ctx.putImageData(imgData, 0, 0);
+        // cover 비율 맞춤(썸네일 표준화: 16:9)
+        if (ib.width !== W || ib.height !== H) {
+          const dst = document.createElement("canvas");
+          dst.width = W; dst.height = H;
+          const dctx = dst.getContext("2d")!;
+          // object-fit: cover
+          const sRatio = ib.width / ib.height, dRatio = W / H;
+          let sx = 0, sy = 0, sW = ib.width, sH = ib.height;
+          if (sRatio > dRatio) { sW = Math.floor(ib.height * dRatio); sx = Math.floor((ib.width - sW) / 2); }
+          else if (sRatio < dRatio) { sH = Math.floor(ib.width / dRatio); sy = Math.floor((ib.height - sH) / 2); }
+          dctx.fillStyle = "#ffffff"; dctx.fillRect(0,0,W,H); // 불투명 배경
+          dctx.drawImage(off, sx, sy, sW, sH, 0, 0, W, H);
+          return await new Promise((res, rej) => dst.toBlob(b => b?res(b):rej("toBlob failed"), "image/jpeg", 0.9)!);
+        }
+        // 그대로 JPEG
+        return await new Promise((res, rej) => off.toBlob(b => b?res(b):rej("toBlob failed"), "image/jpeg", 0.9)!);
+      }
+    }
+
+    // 2) 폴백: 현재 WebGL 캔버스를 그려서 저장(덜 안전)
+    const glCanvas = vp.canvas as HTMLCanvasElement;
+    const off = document.createElement("canvas");
+    off.width = W; off.height = H;
+    const ctx = off.getContext("2d")!;
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+    const sw = glCanvas.width, sh = glCanvas.height;
+    const sRatio = sw / sh, dRatio = W / H;
+    let sx = 0, sy = 0, sW = sw, sH = sh;
+    if (sRatio > dRatio) { sW = Math.floor(sh * dRatio); sx = Math.floor((sw - sW) / 2); }
+    else if (sRatio < dRatio) { sH = Math.floor(sw / dRatio); sy = Math.floor((sh - sH) / 2); }
+    ctx.drawImage(glCanvas, sx, sy, sW, sH, 0, 0, W, H);
+    return await new Promise((res, rej) => off.toBlob(b => b?res(b):rej("toBlob failed"), "image/jpeg", 0.9)!);
+  }
+
   const onCaptureThumb = async () => {
     if (!siteId) return alert("siteId가 없습니다.");
     if (!currentIssue?.id) return alert("이슈 ID가 없습니다.");
@@ -570,44 +726,27 @@ const IssuesWidget = () => {
     IssuesApi.disableDecorations(issueDecorator);
 
     try {
-      // 1) 화면 한 프레임 다시 렌더
+      // 1) 한 프레임 보장 후 안전 캡처
       vp.invalidateRenderPlan();
       vp.synchWithView();
       vp.renderFrame();
+      const blob = await captureViewportImageBlob(vp, 800, 600);
 
-      // 2) 원본 WebGL 캔버스
-      const glCanvas = vp.canvas as HTMLCanvasElement;
-
-      // 3) 고정 해상도/비율(예: 512x288 = 16:9) 오프스크린 캔버스
-      const W = 512, H = 288;
-      const off = document.createElement("canvas");
-      off.width = W; off.height = H;
-      const ctx = off.getContext("2d")!;
-      // 배경 불투명(검정 배경 방지)
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, W, H);
-
-      // 4) object-fit: cover 처럼 맞춰서 그리기(뷰포트 크기와 무관한 일정 썸네일)
-      const sw = glCanvas.width, sh = glCanvas.height;
-      const sRatio = sw / sh, dRatio = W / H;
-      let sx = 0, sy = 0, sW = sw, sH = sh;
-      if (sRatio > dRatio) {
-        // 원본이 더 가로로 넓음 → 좌우를 크롭
-        sW = Math.floor(sh * dRatio);
-        sx = Math.floor((sw - sW) / 2);
-      } else if (sRatio < dRatio) {
-        // 원본이 더 세로로 김 → 상하를 크롭
-        sH = Math.floor(sw / dRatio);
-        sy = Math.floor((sh - sH) / 2);
+      // 6) 좌표가 없으면, 뷰 중심을 pin으로 큐잉(서버 저장 시 함께 반영)
+      if (!currentIssue.modelPin?.location) {
+        const fr = vp.view.computeFitRange();
+        const center = fr.low.interpolate(0.5, fr.high);
+        // 화면에 즉시 반영
+        setCurrentIssue(ci => ci ? ({ ...ci, modelPin: { location: center } }) : ci);
+        setCurrentIssues(list => list.map(it => it.id===currentIssue.id ? ({ ...it, modelPin: { location: center } }) : it));
+        // 서버로도 저장되게 pending 큐에 넣음
+        setPendingIssues(prev => {
+          const dedup = prev.filter(p => !(p.id && String(p.id)===String(currentIssue.id)));
+          return [...dedup, { id: currentIssue.id!, x: center.x, y: center.y, z: center.z }];
+        });
       }
-      ctx.drawImage(glCanvas, sx, sy, sW, sH, 0, 0, W, H);
 
-      // 5) JPG Blob 변환
-      const blob: Blob = await new Promise((resolve, reject) =>
-        off.toBlob((b) => b ? resolve(b) : reject("toBlob failed"), "image/jpeg", 0.9)
-      );
-
-      // 6) 업로드
+      // 7) 업로드
       const base = (auth?.apiBase || "").replace(/\/+$/, "");
       const url = `${base}/itwin/api/issues/uploadThumb.php`;
       const form = new FormData();
@@ -621,7 +760,7 @@ const IssuesWidget = () => {
 
       // 리스트 썸네일 즉시 갱신
       if (currentIssue.displayName) {
-        setPreviewImages(prev => ({ ...prev, [currentIssue.displayName!]: blob }));
+        setPreviewImages(prev => ({ ...prev, [currentIssue.id!]: blob }));
       }
       alert("썸네일을 저장했습니다.");
     } catch (e:any) {
@@ -631,8 +770,11 @@ const IssuesWidget = () => {
       // 6) 데코레이터 다시 켜고 마커 리드로우
       IssuesApi.enableDecorations(issueDecorator);
       setMarkerVersion(v => v + 1);
-      vp.invalidateRenderPlan();
-      vp.renderFrame();
+
+      if (vp) {  
+        vp.invalidateRenderPlan();
+        vp.renderFrame();
+      }  
     }
   };
 
@@ -675,29 +817,36 @@ const IssuesWidget = () => {
   }, [activeTab, getIssueAttachments, getIssueAuditTrail, getIssueComments, getLinkedElements]);
 
   useEffect(() => {
-    const remove = UiFramework.frontstages.onWidgetStateChangedEvent.addListener((args: any) => {
-      const wid = args.widgetDef?.id ?? args.widgetId;
+    const ev: any = UiFramework.frontstages?.onWidgetStateChangedEvent;
+    if (!ev?.addListener) return;
+
+    const handler = (args: any) => {
+      const wid = args?.widgetDef?.id ?? args?.widgetId;
       if (wid !== "IssuesWidget") return;
 
-        const isOpen =
-          args.widgetState === WidgetState.Open ||
-          (WidgetState as any).Visible === args.widgetState; // 일부 버전 호환
+      const isOpen =
+        args.widgetState === WidgetState.Open ||
+        (WidgetState as any).Visible === args.widgetState;
 
-        if (!isOpen) {
-          // 패널이 닫히면 마커/데코레이터 숨김
-          IssuesApi.clearDecoratorPoints(issueDecorator);
-          IssuesApi.disableDecorations(issueDecorator);
-        } else {
-          // 다시 열리면 데코레이터 활성화 (마커는 currentIssues effect가 다시 그림)
-          IssuesApi.enableDecorations(issueDecorator);
-          setMarkerVersion(v => v + 1);             // 마커 재생성 트리거
-          const vp = IModelApp.viewManager.selectedView;
-          vp?.invalidateRenderPlan();
-          vp?.renderFrame();
-        }
+      if (!isOpen) {
+        IssuesApi.clearDecoratorPoints(issueDecorator);
+        IssuesApi.disableDecorations(issueDecorator);
+      } else {
+        const vp = IModelApp?.viewManager?.selectedView;
+        if (!vp) return;
+        IssuesApi.enableDecorations(issueDecorator);
+        setMarkerVersion((v) => v + 1);
+        
+        vp?.invalidateRenderPlan?.();
+        vp?.renderFrame?.();
       }
-    );
-    return () => remove();
+    };
+
+    const remove = ev.addListener(handler);
+    return () => {
+      try { remove?.(); } catch {}
+      try { ev.removeListener?.(handler); } catch {}
+    };
   }, [issueDecorator]);
 
   const issueSummaryContent = () => {
@@ -755,30 +904,48 @@ const IssuesWidget = () => {
   };
 
   const issueAttachmentsContent = React.useCallback(() => {
-    /** grab the comment for the current issue */
-    const dn = currentIssue?.displayName!;
-    const attachments = issueAttachments[currentIssue!.displayName!];
-    const metaData = issueAttachmentMetaData[currentIssue!.displayName!];
+    if (!currentIssue?.id) return <Text>No attachments.</Text>;
+    const id = currentIssue.id;
 
-    // 아직 메타 없음(= 프리뷰만 있거나 아직 로딩 전)
-    if (!metaData) return (<Text>No attachments.</Text>);
-    if (metaData.length === 0) return (<Text>No attachments.</Text>);
-    if (!attachments) return (<div style={{ display: "flex", placeContent: "center" }}><ProgressRadial indeterminate size="small" /></div>);
+    const attachments = issueAttachments[id];
+    const metaData = issueAttachmentMetaData[id];
 
-    /** Loop through the dates and put them together in chunks */
+    if (!metaData) return <Text>No attachments.</Text>;
+    if (metaData.length === 0) return <Text>No attachments.</Text>;
+    if (!attachments) {
+      return (
+        <div style={{ display: "flex", placeContent: "center" }}>
+          <ProgressRadial indeterminate size="small" />
+        </div>
+      );
+    }
+
     return attachments.map((attachment, index) => {
       const urlObj = URL.createObjectURL(attachment);
+      // 각 썸네일 타일이 unmount 되면 revoke
+      // (map 내부라 별도 useEffect가 어려워 onLoad 대체 또는 Anchor onClick로 다운로드만)
       return (
         <Tile
-          key={`${dn}_att_${index}`}
+          key={`${id}_att_${index}`}
           style={{ marginTop: 5, marginBottom: 5 }}
           name={metaData[index]?.fileName}
           description={metaData[index]?.caption}
-          thumbnail={<Anchor href={urlObj} className="thumbnail" download={metaData[index]?.fileName} style={{ backgroundImage: `url(${urlObj})` }} />}
+          thumbnail={
+            <Anchor
+              href={urlObj}
+              className="thumbnail"
+              download={metaData[index]?.fileName}
+              style={{ backgroundImage: `url(${urlObj})` }}
+              onMouseDown={() => {
+                // 다운로드 트리거 후 다음 틱에 revoke 시도(사용자가 클릭했을 때)
+                setTimeout(() => URL.revokeObjectURL(urlObj), 0);
+              }}
+            />
+          }
         />
       );
     });
-  }, [issueAttachments, issueAttachmentMetaData, currentIssue]);
+  }, [currentIssue?.id, issueAttachments, issueAttachmentMetaData]);
 
   const getColorByAction = (action: string | undefined) => {
     if (undefined === action)
@@ -824,15 +991,15 @@ const IssuesWidget = () => {
   };
 
   const issueAuditTrailContent = () => {
-    /** grab the comment for the current issue */
-    const comments = issueComments[currentIssue!.displayName!];
+    if (!currentIssue?.id) return <Text>No content.</Text>;
+    const id = currentIssue.id;
 
-    /** grab the audit trail for the current issue */
-    const auditTrail = issueAuditTrails[currentIssue!.displayName!];
+    const comments = issueComments[id];
+    const auditTrail = issueAuditTrails[id];
 
     if (comments === undefined || auditTrail === undefined)
-      return (<div style={{ display: "flex", placeContent: "center" }}><ProgressRadial indeterminate={true} size="small"></ProgressRadial></div>);
-    else if (comments.length === 0 && auditTrail.length === 0)
+      return (<div style={{ display: "flex", placeContent: "center" }}><ProgressRadial indeterminate size="small" /></div>);
+    if (comments.length === 0 && auditTrail.length === 0)
       return (<Text>No content.</Text>);
 
     /** separate audit trail by day */
@@ -910,28 +1077,6 @@ const IssuesWidget = () => {
     { value: "Verified", label: "Verified" },
     { value: "Deleted", label: "Deleted" },
   ];
-
-  const getTabContent = () => {
-    switch (activeTab) {
-      case 0:
-        return (<div className={"issue-summary"}>
-          {issueSummaryContent()}
-          {issueLinkedElements()}
-        </div>);
-      case 1:
-        return (
-          <div className={"issue-attachments"}>
-            {issueAttachmentsContent()}
-          </div>);
-      case 2:
-        return (
-          <div className={"issue-audit-trail"}>
-            {issueAuditTrailContent()}
-          </div>);
-      default:
-        return (<></>);
-    }
-  };
 
   // ① Add: 임시 이슈 추가(좌표/엘리먼트ID는 필요시 채워넣기)
   const onAdd = () => setShowAdd(true);
@@ -1117,6 +1262,69 @@ const IssuesWidget = () => {
 
   // 링크 전체 제거
   const onUnlinkAll = () => setEditLinks([]);
+  
+  // ------- F1) 리스트 아이템(썸네일 URL 생성/정리) 컴포넌트 -------
+  const IssueListItem: React.FC<{
+    issue: IssueGet;
+    blob?: Blob;
+    onZoom: () => void;
+    color: string;
+    onOpenDetail: () => void;
+  }> = ({ issue, blob, onZoom, color, onOpenDetail }) => {
+    const [url, setUrl] = React.useState<string>();
+
+    useEffect(() => {
+      if (!blob) {
+        setUrl(undefined);
+        return;
+      }
+      // 플레이스홀더(1x1 투명 PNG) 피하기
+      if (blob.type === "image/png" && blob.size <= 100) {
+        setUrl(undefined);
+        return;
+      }
+      const u = URL.createObjectURL(blob);
+      setUrl(u);
+      return () => URL.revokeObjectURL(u);
+    }, [blob]);
+
+    const createdDate =
+      (issue.createdDateTime ?? issue.lastModifiedDateTime ?? issue.dueDate)
+        ? new Date(
+            (issue.createdDateTime ?? issue.lastModifiedDateTime ?? (issue.dueDate as string))
+          ).toLocaleDateString()
+        : undefined;
+
+    return (
+      <div className="issue">
+        <div className="issue-preview">
+          <div
+            className="thumbnail"
+            role="presentation"
+            style={url ? { backgroundImage: `url(${url})` } : {}}
+            onClick={onZoom}
+            title="Locate & Zoom"
+          >
+            <span className="open icon icon-zoom" />
+          </div>
+          <div
+            className="issue-status"
+            style={{ borderTop: `14px solid ${color}`, borderLeft: `14px solid transparent` }}
+          />
+        </div>
+        <div className="issue-info" role="presentation" onClick={onOpenDetail}>
+          <Text variant="leading" className={"issue-title"}>
+            {`${issue.number ?? `i-${String(issue.id).padStart(5, "0")}`} | ${issue.subject ?? ""}`}
+          </Text>
+          <div className="issue-subtitle">
+            <span className={"assignee-display-name"}>{issue.assignee?.displayName}</span>
+            <div className={"created-date"}><span>{createdDate}</span></div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 
   return (
     <>
@@ -1167,42 +1375,18 @@ const IssuesWidget = () => {
         {!currentIssue && currentIssues.length > 0 &&
           <div>
             {currentIssues.map((issue: IssueGet) => {
-              const createdDate =
-                (issue.createdDateTime ?? issue.lastModifiedDateTime ?? issue.dueDate)
-                  ? new Date(issue.createdDateTime ?? issue.lastModifiedDateTime ?? issue.dueDate!).toLocaleDateString()
-                  : undefined;
-
-              const binaryUrl = issue.displayName && previewImages[issue.displayName]
-                ? URL.createObjectURL(previewImages[issue.displayName])
-                : undefined;
-              const imageStyle = binaryUrl ? { backgroundImage: `url(${binaryUrl})` } : {};
+              const color = issueStatusColor(issue);
+              const blob = issue.id ? previewImages[issue.id] : undefined;
 
               return (
-                <div key={issue.id} className="issue">
-                  <div className="issue-preview">
-                    <div
-                      className="thumbnail"
-                      role="presentation"
-                      style={binaryUrl ? { backgroundImage: `url(${binaryUrl})` } : {}}
-                      onClick={async () => applyView(issue)}   // ← 항상 클릭 시 줌
-                      title="Locate & Zoom"
-                    >
-                      <span className="open icon icon-zoom" />
-                    </div>
-                    <div className="issue-status" style={{ borderTop: `14px solid ${issueStatusColor(issue)}`, borderLeft: `14px solid transparent` }} />
-                  </div>
-                  <div className="issue-info" role="presentation" onClick={() => { setCurrentIssue(issue); setActiveTab(0); }}>
-                    <Text variant="leading" className={"issue-title"}>
-                      {`${issue.number ?? `i-${String(issue.id).padStart(5,'0')}`} | ${issue.subject ?? ""}`}
-                    </Text>
-                    <div className="issue-subtitle">
-                      <span className={"assignee-display-name"}>{issue.assignee?.displayName}</span>
-                      <div className={"created-date"}>
-                        <span>{createdDate}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <IssueListItem
+                  key={issue.id}
+                  issue={issue}
+                  blob={blob}
+                  color={color}
+                  onZoom={() => applyView(issue)}
+                  onOpenDetail={() => { setCurrentIssue(issue); setActiveTab(0); }}
+                />
               );
             })}
           </div>
@@ -1237,15 +1421,32 @@ const IssuesWidget = () => {
 
             <Tabs
               orientation="horizontal"
-              onTabSelected={(index) => setActiveTab(index)}
+              activeIndex={activeTab}
+              onTabSelected={setActiveTab}
               labels={[
-                <Tab key={0} label="Summary" />,
-                <Tab key={1} label="Attachments" />,
-                <Tab key={2} label="Audit Trail" />,
+                <Tab key="sum" label="Summary" />,
+                <Tab key="att" label="Attachments" />,
+                <Tab key="aud" label="Audit Trail" />,
               ]}
-            >
-              {getTabContent()}
-            </Tabs>
+            />
+
+            {/* 패널은 직접 조건부 렌더링으로 딱 하나만 표시 */}
+            {activeTab === 0 && (
+              <div className="issue-summary">
+                {issueSummaryContent()}
+                {issueLinkedElements()}
+              </div>
+            )}
+            {activeTab === 1 && (
+              <div className="issue-attachments">
+                {issueAttachmentsContent()}
+              </div>
+            )}
+            {activeTab === 2 && (
+              <div className="issue-audit-trail">
+                {issueAuditTrailContent()}
+              </div>
+            )}
           </div>
         }
       </div>

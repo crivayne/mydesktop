@@ -92,7 +92,15 @@ const LoginPanel: React.FC<Props> = ({ onSuccess }) => {
   };
 
   return (
-    <div style={{ height: "100vh", display: "grid", placeItems: "center", background: "linear-gradient(180deg,#f7f9fc,#eef2f7)" }}>
+    <div   
+      style={{
+      width: "100%",
+      height: "100%",
+      minHeight: "100vh",
+      display: "grid",
+      placeItems: "center", /*background: "linear-gradient(180deg,#f7f9fc,#eef2f7)"*/ 
+      }}
+    >
       <form onSubmit={handleSubmit} style={card}>
         <h2 style={{ marginTop: 0, marginBottom: 16 }}>🔐 Local Server Login</h2>
 

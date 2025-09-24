@@ -3,7 +3,7 @@
 * See LICENSE.md in the project root for license terms and full copyright notice.
 *--------------------------------------------------------------------------------------------*/
 import React from "react"; 
-
+import "@itwin/itwinui-react/styles.css"; // v2+
 import { type DesktopInitializerParams, useConnectivity , useDesktopViewerInitializer } from "@itwin/desktop-viewer-react";
 import { SvgIModelLoader } from "@itwin/itwinui-illustrations-react";
 import { PageLayout } from "@itwin/itwinui-layouts-react";
@@ -160,29 +160,47 @@ const App = () => {
         <AuthProvider>
           <BrowserRouter>
             <SettingsContextProvider>
-              <PageLayout>
+              <PageLayout style = {{height: "100%", minHeight: 0}} >
                 <MenuVisibilityBridge />
                 <IpcMenuBridge />
                 <Routes>
-                  {/* 패딩 있는 레이아웃 */}
-                  <Route element={<PageLayout.Content padded><Outlet /></PageLayout.Content>}>
-                    {/* 앱 시작점: 로그인 */}
-                    <Route path="/" element={<LoginPage />} />
-                    {/* 로그인 후: 기존 ProjectSite 화면 */}
-                    <Route path="/home" element={<SitesPage />} />
-                  </Route>
-                  {/* 뷰어 영역 */}
+                  {/* ✅ 로그인 */}
                   <Route
                     element={
-                      <PageLayout.Content>
-                        <Outlet />
+                      <PageLayout.Content style={{ height: "100%", minHeight: 0, padding: 0, background: "transparent" }}>
+                          <ThemeProvider theme="dark" style={{ height: "100%" }}>
+                          <Outlet />
+                          </ThemeProvider>
                       </PageLayout.Content>
+                    }
+                  >
+                    <Route path="/" element={<LoginPage />} />
+                  </Route>
+
+                  {/* 홈: 기존처럼 패딩 있는 레이아웃 */}
+                  <Route element={
+                    <PageLayout.Content padded style={{ height: "100%", minHeight: 0 }}>
+                      <ThemeProvider theme="dark" style={{ height: "100%" }}>
+                        <Outlet />
+                      </ThemeProvider>
+                    </PageLayout.Content>
+                    }
+                  >
+                    <Route path="/home" element={<SitesPage />} />
+                  </Route>
+
+                  {/* 뷰어 영역: 기존 그대로 */}
+                  <Route element={
+                    <PageLayout.Content style={{ height: "100%", minHeight: 0 }}>
+                      <ThemeProvider theme="dark" style={{ height: "100%" }}>
+                        <Outlet />
+                      </ThemeProvider>
+                    </PageLayout.Content>
                     }
                   >
                     <Route path="/viewer" element={<ViewerRoute />} />
                   </Route>
 
-                  {/* 기타 경로는 로그인으로 */}
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </PageLayout>
