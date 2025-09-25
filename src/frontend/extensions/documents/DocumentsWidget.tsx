@@ -1,6 +1,6 @@
 // src/frontend/extensions/documents/DocumentsWidget.tsx
 import React from "react";
-import { Button, InputGroup, LabeledSelect, ProgressRadial, Table, Text } from "@itwin/itwinui-react";
+import { Button, InputGroup, LabeledSelect, ProgressRadial, Table, Text, Modal, ModalButtonBar } from "@itwin/itwinui-react";
 import { StagePanelLocation, StagePanelSection, UiItemsProvider, Widget, WidgetState, UiFramework } from "@itwin/appui-react";
 import type { SelectOption, } from "@itwin/itwinui-react";
 import { useAuth } from "../../services/AuthContext";
@@ -31,6 +31,9 @@ const DocumentsWidget: React.FC = () => {
   const [q, setQ] = React.useState("");
   const [ext, setExt] = React.useState("all");
   const [selId, setSelId] = React.useState<number|undefined>(); // 리스트 선택
+  const [showRename, setShowRename] = React.useState(false);
+  const [renameValue, setRenameValue] = React.useState("");
+
 
   const reload = React.useCallback(async ()=>{
     if (!siteId) { setError("siteId가 없습니다."); return; }
@@ -70,16 +73,9 @@ const DocumentsWidget: React.FC = () => {
     if (!auth?.userId || !siteId) return alert("로그인이 필요합니다.");
     const it = items.find(i => i.id === selId);
     if (!it) return alert("먼저 항목을 선택하세요.");
-    const newName = prompt("새 파일명(확장자 제외):", it.curr_name)?.trim();
-    if (!newName) return;
-
-    try {
-      setLoading(true);
-      await DocumentsApi.rename(siteId, it.id, newName, auth.userId);
-      setItems(prev => prev.map(r => r.id===it.id ? { ...r, curr_name: newName, state:"renamed", lasteditBy:auth.userId, lasteditAt:new Date().toISOString().slice(0,19).replace('T',' ') } : r));
-    } catch(e:any) {
-      alert(`Rename failed: ${e?.message || e}`);
-    } finally { setLoading(false); }
+    // 모달 오픈: 기존 이름을 기본값으로
+    setRenameValue(it.curr_name || "");
+    setShowRename(true);
   };
 
   const onDelete = async () => {
@@ -109,6 +105,26 @@ const DocumentsWidget: React.FC = () => {
     // 브라우저에서 바로 열기(이미지, pdf 등)
     const url = DocumentsApi.openUrl(siteId, it);
     window.open(url, "_blank");
+  };
+
+  const confirmRename = async () => {
+    const it = items.find(i => i.id === selId);
+    if (!it) { setShowRename(false); return; }
+    const newName = renameValue.trim();
+    if (!newName) { alert("파일명을 입력하세요."); return; }
+
+    try {
+      setLoading(true);
+      await DocumentsApi.rename(siteId, it.id, newName, auth.userId);
+      setItems(prev => prev.map(r => r.id===it.id
+        ? { ...r, curr_name: newName, state:"renamed", lasteditBy:auth.userId, lasteditAt:new Date().toISOString().slice(0,19).replace('T',' ') }
+        : r));
+      setShowRename(false);
+    } catch(e:any) {
+      alert(`Rename failed: ${e?.message || e}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   // 간단 테이블
@@ -168,7 +184,33 @@ const DocumentsWidget: React.FC = () => {
         })}
         />
       )}
+      <Modal
+        isOpen={showRename}
+        title="Rename"
+        onClose={() => setShowRename(false)}
+        closeOnEsc
+        closeOnExternalClick
+      >
+        <div style={{ display:"grid", gap:8 }}>
+          <InputGroup label="새 파일명(확장자 제외)">
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(e)=>setRenameValue(e.target.value)}
+              onKeyDown={(e)=>{ if (e.key === "Enter") confirmRename(); }}
+            />
+          </InputGroup>
+          <div style={{ fontSize:12, opacity:.7 }}>
+            실제 파일은 <code>현재이름.확장자</code> 형식으로 저장됩니다.
+          </div>
+        </div>
+        <ModalButtonBar>
+          <Button onClick={() => setShowRename(false)}>Cancel</Button>
+          <Button styleType="high-visibility" onClick={confirmRename}>Apply</Button>
+        </ModalButtonBar>
+      </Modal>
     </div>
+    
   );
 };
 
