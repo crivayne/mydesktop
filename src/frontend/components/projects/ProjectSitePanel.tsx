@@ -5,7 +5,7 @@ import { channelName } from "../../../common/ViewerConfig";
 import { Api } from "../../services/api";
 import type { RealityLibRow } from "../../services/api";
 import BusyOverlay from "../common/BusyOverlay";
-import RealityLibraryDialog from "../common/RealityLibraryDialog";
+import MainLibraryDialog from "../library/MainLibraryDialog";
 
 // 간단 폼 POST (PHP의 $_POST 호환)
 async function postForm<T>(url: string, data: Record<string, string>) {
@@ -105,7 +105,7 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
   const [progressPct, setProgressPct] = useState<number | null>(null);
   const [progressLabel, setProgressLabel] = useState<string>("");  // 상황별 라벨
 
-  const [libOpen, setLibOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
 
 
   // 이름 입력을 Promise로 받는 헬퍼
@@ -376,23 +376,7 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
     <div style={{ padding: 16, height: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
       <header style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <h2 style={{ margin: 0, flex: 1 }}>Projects & Sites</h2>
-        <button onClick={locateImporter}>Importer 2.0 경로 지정…</button>
-        <button onClick={runImodelImporterCLI}>Importer 2.0 실행(CLI)…</button>
-
-        {isAdmin && (
-          <button disabled={busy} onClick={uploadSnapshotGlobal}>스냅샷 업로드(서버)…</button>
-        )}
-        {isAdmin && (
-          <button onClick={()=>setLibOpen(true)}>Reality Data…</button>
-        )}
-
-        {isAdmin && (
-          <>
-            <span style={{ opacity: 0.4, margin: "0 6px" }}>|</span>
-            <button disabled={busy} onClick={createProject}>프로젝트 추가</button>
-            <button disabled={busy} onClick={createSite}>사이트 추가</button>
-          </>
-        )}
+        <button onClick={() => setLibraryOpen(true)}>Main Library…</button>
       </header>
 
       <div
@@ -406,19 +390,16 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
       >
         {/* Projects */}
         <section style={{ border: "1px solid #333", borderRadius: 8, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: "10px 12px", borderBottom: "1px solid #333", display: "flex", alignItems: "center" }}>
+          <div style={{ padding:"10px 12px", borderBottom:"1px solid #333", display:"flex", alignItems:"center" }}>
             <strong style={{ flex: 1 }}>Projects</strong>
             <button
-              style={{
-                fontSize: 12,
-                padding: "2px 8px",
-                opacity: selectedProjectId === "ALL" ? 0.7 : 1,
-              }}
+              style={{ fontSize: 12, padding: "2px 8px", marginRight: 8, opacity: selectedProjectId === "ALL" ? 0.7 : 1 }}
               onClick={() => setSelectedProjectId("ALL")}
               title="모든 사이트 보기"
             >
               ALL
             </button>
+            {isAdmin && <button disabled={busy} onClick={createProject}>Add</button>}
           </div>
 
           <div style={{ padding: 8, overflow: "auto" }}>
@@ -466,12 +447,13 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
 
         {/* Sites */}
         <section style={{ border: "1px solid #333", borderRadius: 8, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          <div style={{ padding: "10px 12px", borderBottom: "1px solid #333" }}>
-            <strong>
+          <div style={{ padding:"10px 12px", borderBottom:"1px solid #333", display:"flex", alignItems:"center" }}>
+            <strong style={{ flex: 1 }}>
               Sites {selectedProjectId !== "ALL"
-                ? `(Project: ${projects.find((p: Project) => p.id === selectedProjectId)?.name || ""})`
+                ? `(Project: ${projects.find((p) => p.id === selectedProjectId)?.name || ""})`
                 : "(ALL)"}
             </strong>
+            {isAdmin && <button disabled={busy} onClick={createSite}>Add</button>}
           </div>
 
           <div style={{ padding: 8, overflow: "auto" }}>
@@ -543,10 +525,13 @@ export default function ProjectSitePanel({ userId, apiBase, isAdmin, onOpenSite 
         }}
       />
       <BusyOverlay open={busy} label={progressLabel} percent={progressPct} />
-      <RealityLibraryDialog
-        open={libOpen}
-        onClose={()=>setLibOpen(false)}
-        admin
+      <MainLibraryDialog
+        open={libraryOpen}
+        onClose={() => setLibraryOpen(false)}
+        isAdmin={isAdmin}
+        onLocateImporter={locateImporter}
+        onRunImporterCLI={runImodelImporterCLI}
+        onUploadSnapshot={uploadSnapshotGlobal}
       />
     </div>
   );
